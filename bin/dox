@@ -13,11 +13,18 @@ Jobs and who does them:
   J2 keep the structural index right  -> `dox sync`     (deterministic)
   J3 keep the prose right             -> the agent, when `dox check` flags it
 
+Each AGENTS.md documents a single domain (folder) with the conventional sections
+from the DOX video - Purpose, Ownership, Local contracts (rules), Work guidance,
+Test & verify - and ends with a Child Docs Index linking its subfolders. A folder
+may opt into per-file docs (a sibling <file>.md per source file) by adding the
+marker `<!-- dox:per-file -->` to its AGENTS.md.
+
 Subcommands:
-  init      scaffold .dox.json + a root AGENTS.md
-  sync      regenerate the managed index block in every AGENTS.md
-  check     report drift (missing docs / stale index / dangling refs / prose drift)
-  context   print the root->path AGENTS.md chain (used by hooks and agents)
+  init [--scaffold]  scaffold .dox.json + root AGENTS.md (+ a stub per folder)
+  sync               regenerate the Child Docs Index in every AGENTS.md
+  check              report drift: missing docs / stale index / dangling refs /
+                     missing sections / missing per-file docs / prose drift
+  context            print the root->path AGENTS.md chain (used by hooks and agents)
 
 Stdlib only. No dependencies. Exit codes: 0 clean, 1 hard drift, 2 usage error.
 """
@@ -35,10 +42,25 @@ DOC_NAME_DEFAULT = "AGENTS.md"
 CONFIG_NAME = ".dox.json"
 INDEX_OPEN = "<!-- dox:index -->"
 INDEX_CLOSE = "<!-- /dox:index -->"
+INDEX_HEADING = "## Child Docs Index"
+PERFILE_MARKER = "<!-- dox:per-file -->"
+
+# Canonical sections every domain doc carries, per the DOX video: purpose,
+# ownership, local contracts (rules), work guidance, how to test and verify.
+# Matched case-insensitively by the listed aliases so wording can vary.
+SECTION_ALIASES = {
+    "Purpose": ["purpose"],
+    "Ownership": ["ownership", "parent"],
+    "Local contracts": ["contract", "rules"],
+    "Work guidance": ["guidance", "how to work"],
+    "Test & verify": ["verify", "how to test"],
+}
 
 DEFAULT_CONFIG = {
     "doc_name": DOC_NAME_DEFAULT,
     "include": ["."],
+    "required_sections": list(SECTION_ALIASES.keys()),
+    "enforce_sections": True,
     "exclude": [
         ".git", "node_modules", "dist", "build", "out", "target",
         "__pycache__", ".venv", "venv", ".next", ".cache", "coverage",
@@ -119,16 +141,37 @@ def scope_dirs(root: Path, cfg: dict):
 
 # ---------- summaries / index ----------
 
-def summary_of(doc_path: Path) -> str:
-    """First plain prose line of a doc - the one-line purpose.
+def _clip(s: str, n: int = 140) -> str:
+    s = s.strip()
+    return s if len(s) <= n else s[: n - 3] + "..."
 
-    Convention: the first non-empty line that is not a heading, list item,
-    blockquote, code fence, or a dox marker. Truncated for the parent index.
+
+def summary_of(doc_path: Path) -> str:
+    """The one-line purpose of a doc, for the parent index.
+
+    Prefers the Purpose section text ('**Purpose** - ...' or a 'Purpose'
+    heading's first line); falls back to the first plain prose line. This is
+    what propagates a domain's purpose upward into its parent's Child Docs Index.
     """
     if not doc_path.exists():
         return ""
+    lines = doc_path.read_text(encoding="utf-8").splitlines()
+    # 1) inline label: **Purpose** - text   |   **Purpose:** text
+    for raw in lines:
+        m = re.match(r"\s*\*\*\s*purpose\s*\*\*\s*[:\-—]?\s*(.+)", raw, re.I)
+        if m and m.group(1).strip():
+            return _clip(m.group(1))
+    # 2) a 'Purpose' heading, then the next prose line
+    for i, raw in enumerate(lines):
+        if re.match(r"\s*#+\s*purpose\b", raw, re.I):
+            for nxt in lines[i + 1:]:
+                t = nxt.strip()
+                if t and not t.startswith(("#", "<!--")):
+                    return _clip(t.lstrip("-*> ").strip())
+            break
+    # 3) fallback: first plain prose line outside the index block
     in_index = False
-    for raw in doc_path.read_text(encoding="utf-8").splitlines():
+    for raw in lines:
         line = raw.strip()
         if line == INDEX_OPEN:
             in_index = True
@@ -140,8 +183,26 @@ def summary_of(doc_path: Path) -> str:
             continue
         if line.startswith(("#", "-", "*", ">", "```", "<!--", "|")):
             continue
-        return line if len(line) <= 140 else line[:137] + "..."
+        return _clip(line)
     return ""
+
+
+def section_present(text: str, name: str) -> bool:
+    t = text.lower()
+    return any(k in t for k in SECTION_ALIASES.get(name, [name.lower()]))
+
+
+def code_files(d: Path, cfg: dict) -> list[Path]:
+    exts = set(cfg["code_exts"])
+    try:
+        return sorted(f for f in d.iterdir() if f.is_file() and f.suffix in exts)
+    except OSError:
+        return []
+
+
+def is_perfile_dir(d: Path, cfg: dict) -> bool:
+    dp = d / cfg["doc_name"]
+    return dp.exists() and PERFILE_MARKER in dp.read_text(encoding="utf-8")
 
 
 def child_areas(d: Path, root: Path, cfg: dict) -> list[tuple[str, str, bool]]:
@@ -182,25 +243,39 @@ def gen_index(d: Path, root: Path, cfg: dict) -> str:
     areas = child_areas(d, root, cfg)
     lines = [INDEX_OPEN,
              "<!-- generated by `dox sync` - do not edit by hand -->",
-             "### Map"]
-    if not areas:
-        lines.append("_Leaf area - no subareas._")
-    else:
-        for name, summ, documented in areas:
-            link = f"[`{name}/`]({name}/{doc})" if documented else f"`{name}/`"
-            tail = f" - {summ}" if summ else (" - _(undocumented)_" if not documented else "")
-            lines.append(f"- {link}{tail}")
+             INDEX_HEADING]
+    body = []
+    # Sub-domains (child folders).
+    for name, summ, documented in areas:
+        link = f"[`{name}/`]({name}/{doc})" if documented else f"`{name}/`"
+        tail = f" - {summ}" if summ else (" - _(undocumented)_" if not documented else "")
+        body.append(f"- {link}{tail}")
+    # Per-file docs, when this folder opts into per-file documentation.
+    if is_perfile_dir(d, cfg):
+        for f in code_files(d, cfg):
+            sib = d / (f.name + ".md")
+            if sib.exists():
+                body.append(f"- [`{f.name}`]({f.name}.md) - {summary_of(sib)}".rstrip(" -"))
+            else:
+                body.append(f"- `{f.name}` - _(undocumented)_")
+    if not body:
+        body.append("_Leaf domain - no children._")
+    lines.extend(body)
     lines.append(INDEX_CLOSE)
     return "\n".join(lines)
 
 
+# Markers are only recognised when alone on their own line, so prose that
+# merely mentions the marker string (e.g. in a rules bullet) is never matched.
+INDEX_BLOCK_RE = re.compile(
+    r"^[ \t]*" + re.escape(INDEX_OPEN) + r"[ \t]*$.*?^[ \t]*" + re.escape(INDEX_CLOSE) + r"[ \t]*$",
+    re.DOTALL | re.MULTILINE,
+)
+
+
 def replace_index(text: str, block: str) -> str:
-    if INDEX_OPEN in text and INDEX_CLOSE in text:
-        pattern = re.compile(
-            re.escape(INDEX_OPEN) + r".*?" + re.escape(INDEX_CLOSE),
-            re.DOTALL,
-        )
-        return pattern.sub(lambda _: block, text, count=1)
+    if INDEX_BLOCK_RE.search(text):
+        return INDEX_BLOCK_RE.sub(lambda _: block, text, count=1)
     sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
     return text + sep + block + "\n"
 
@@ -259,13 +334,25 @@ def cmd_init(root: Path, cfg: dict, args) -> int:
     if not cfgp.exists():
         cfgp.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {CONFIG_NAME}")
-    doc = root / cfg["doc_name"]
-    if not doc.exists():
-        doc.write_text(ROOT_TEMPLATE, encoding="utf-8")
-        print(f"wrote {cfg['doc_name']}")
+    doc = cfg["doc_name"]
+    written = 0
+    rootdoc = root / doc
+    if not rootdoc.exists():
+        rootdoc.write_text(ROOT_TEMPLATE, encoding="utf-8")
+        written += 1
+    if args.scaffold:
+        # Stub a canonical-section doc in every in-scope folder, leaving prose
+        # (J3) to the agent. Structure is deterministic; content is not.
+        for d in scope_dirs(root, cfg):
+            dp = d / doc
+            if dp.exists():
+                continue
+            dp.write_text(stub_template(d.name if d != root else "Project"), encoding="utf-8")
+            written += 1
     n = sync_all(root, cfg, write=True)
-    print(f"synced {n} doc(s). Next: write a one-line purpose at the top of each AGENTS.md, "
-          f"then `dox check`.")
+    print(f"wrote {written} doc stub(s), synced {n}. "
+          f"Next: fill Purpose/contracts/etc. in each {doc}, then `dox check`."
+          + ("" if args.scaffold else f"  (use `dox init --scaffold` to stub every folder)"))
     return 0
 
 
@@ -302,16 +389,27 @@ def cmd_check(root: Path, cfg: dict, args) -> int:
             if (dir_has_code(d, cfg) or d == root) and not (d / doc).exists():
                 hard.append(f"MISSING   {d.relative_to(root)}/ has code but no {doc}")
 
-    # stale index + dangling refs
+    # stale index + dangling refs + required sections + per-file docs
     for d in scope_dirs(root, cfg):
         dp = d / doc
         if not dp.exists():
             continue
-        old = dp.read_text(encoding="utf-8")
-        if replace_index(old, gen_index(d, root, cfg)) != old:
-            hard.append(f"STALE     {dp.relative_to(root)} index out of date (run `dox sync`)")
+        text = dp.read_text(encoding="utf-8")
+        reld = dp.relative_to(root)
+        if replace_index(text, gen_index(d, root, cfg)) != text:
+            hard.append(f"STALE     {reld} index out of date (run `dox sync`)")
         for ref in dangling_refs(dp, cfg):
-            hard.append(f"DANGLING  {dp.relative_to(root)} -> {ref} (missing)")
+            hard.append(f"DANGLING  {reld} -> {ref} (missing)")
+        if cfg.get("enforce_sections", True):
+            missing = [s for s in cfg["required_sections"] if not section_present(text, s)]
+            if missing:
+                warn.append(f"SECTIONS  {reld} missing: {', '.join(missing)}")
+        # per-file documentation: a sibling <file>.md per source file
+        if is_perfile_dir(d, cfg):
+            for f in code_files(d, cfg):
+                if not (d / (f.name + ".md")).exists():
+                    hard.append(f"FILEDOC   {(f.relative_to(root))} has no sibling {f.name}.md "
+                                f"(folder is per-file)")
 
     # prose drift: code in a dir changed but its doc did not (git only)
     changed = git_changed(root, cfg)
@@ -371,14 +469,58 @@ def cmd_context(root: Path, cfg: dict, args) -> int:
     return 0
 
 
-ROOT_TEMPLATE = f"""# Project
+ROOT_TEMPLATE = f"""<!-- Your own project/agent instructions stay above. The DOX framework is appended below. -->
 
-One-line purpose of this repository goes here (this line feeds the parent index).
+# DOX framework
 
-## Conventions
-- Document stable contracts, not history. Keep each {DOC_NAME_DEFAULT} concise and current.
-- Before editing a path, read the {DOC_NAME_DEFAULT} chain from here down to it (`dox context <path>`).
-- After a meaningful change, update the affected {DOC_NAME_DEFAULT} prose. `dox sync` handles the index.
+You maintain a hierarchy of {DOC_NAME_DEFAULT} files coupled to the codebase - one per
+folder - as a map of this repo. Each file documents a single domain and ends with a
+Child Docs Index linking its subfolders.
+
+- **Before editing** a path, read the {DOC_NAME_DEFAULT} chain from the root down to it
+  (`dox context <path>`). Higher files give broad rules; deeper files give specifics.
+- **After a meaningful change**, update the affected {DOC_NAME_DEFAULT}(s) - the closest one
+  and any parent whose contract changed. `dox sync` regenerates the index blocks.
+- Keep docs concise and current: stable contracts, not history. Delete stale content.
+- Shared code in another branch of the tree may be linked from the index or a section.
+
+## Purpose
+What this repository is for (one line - this feeds the parent index).
+
+## Ownership
+Top-level. Owns repo-wide conventions.
+
+## Local contracts (rules)
+- Repo-wide rules an agent must not violate.
+
+## Work guidance
+- How to organize code, where things go.
+
+## Test & verify
+- How to test and verify changes.
+
+{INDEX_OPEN}
+{INDEX_CLOSE}
+"""
+
+
+def stub_template(name: str) -> str:
+    return f"""# {name}
+
+## Purpose
+What `{name}/` is for (one line - this feeds the parent index).
+
+## Ownership
+Parent package / who owns this domain.
+
+## Local contracts (rules)
+- Rules specific to this folder (e.g. "return typed results, dataclasses or none").
+
+## Work guidance
+- How to work here, where to put things.
+
+## Test & verify
+- How to test and verify changes in this folder.
 
 {INDEX_OPEN}
 {INDEX_CLOSE}
@@ -394,7 +536,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="dox", description="deterministic AGENTS.md tree engine")
     ap.add_argument("-C", dest="chdir", default=".", help="run as if started in this dir")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("init", help="scaffold config + root doc")
+    pi = sub.add_parser("init", help="scaffold config + root doc")
+    pi.add_argument("--scaffold", action="store_true",
+                    help="also stub a canonical-section AGENTS.md in every in-scope folder")
     sub.add_parser("sync", help="regenerate index blocks")
     pc = sub.add_parser("check", help="report drift")
     pc.add_argument("--strict", action="store_true", help="treat warnings as failures")
