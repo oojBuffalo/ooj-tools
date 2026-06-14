@@ -1,0 +1,26 @@
+{
+  "//": "Merge this into .claude/settings.json. Paths assume dox lives at <repo>/dox; adjust if vendored elsewhere.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/dox/hooks/claude/dox-context.sh\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/dox/hooks/claude/dox-gate.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""dox - deterministic AGENTS.md tree engine.
+
+A hierarchy of AGENTS.md files acts as a map of a codebase so a coding agent
+loads only the docs relevant to the path it is touching, instead of the whole
+repo. DOX (the original) is a prompt that asks the model to maintain this by
+hand. This is the mechanistic version: the structure and the index are derived
+from the filesystem, drift is detected by a script, and the model is only ever
+asked to write prose - and only when this tool says it must.
+
+Jobs and who does them:
+  J1 load the right docs for a path   -> `dox context`  (deterministic)
+  J2 keep the structural index right  -> `dox sync`     (deterministic)
+  J3 keep the prose right             -> the agent, when `dox check` flags it
+
+Subcommands:
+  init      scaffold .dox.json + a root AGENTS.md
+  sync      regenerate the managed index block in every AGENTS.md
+  check     report drift (missing docs / stale index / dangling refs / prose drift)
+  context   print the root->path AGENTS.md chain (used by hooks and agents)
+
+Stdlib only. No dependencies. Exit codes: 0 clean, 1 hard drift, 2 usage error.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+DOC_NAME_DEFAULT = "AGENTS.md"
+CONFIG_NAME = ".dox.json"
+INDEX_OPEN = "<!-- dox:index -->"
+INDEX_CLOSE = "<!-- /dox:index -->"
+
+DEFAULT_CONFIG = {
+    "doc_name": DOC_NAME_DEFAULT,
+    "include": ["."],
+    "exclude": [
+        ".git", "node_modules", "dist", "build", "out", "target",
+        "__pycache__", ".venv", "venv", ".next", ".cache", "coverage",
+    ],
+    "code_exts": [
+        ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".rs",
+        ".java", ".kt", ".rb", ".php", ".c", ".cc", ".cpp", ".h", ".hpp",
+        ".cs", ".swift", ".scala", ".sh", ".sql",
+    ],
+    "require_docs_for_code_dirs": True,
+}
+
+
+# ---------- repo / config ----------
+
+def find_root(start: Path) -> Path:
+    start = start.resolve()
+    for d in [start, *start.parents]:
+        if (d / CONFIG_NAME).exists() or (d / ".git").exists():
+            return d
+    return start
+
+
+def load_config(root: Path) -> dict:
+    cfg = dict(DEFAULT_CONFIG)
+    p = root / CONFIG_NAME
+    if p.exists():
+        try:
+            cfg.update(json.loads(p.read_text(encoding="utf-8")))
+        except json.JSONDecodeError as e:
+            die(f"invalid {CONFIG_NAME}: {e}")
+    return cfg
+
+
+# ---------- scope ----------
+
+def is_excluded(rel: Path, cfg: dict) -> bool:
+    parts = set(rel.parts)
+    return any(ex in parts for ex in cfg["exclude"])
+
+
+def dir_has_code(d: Path, cfg: dict) -> bool:
+    exts = set(cfg["code_exts"])
+    try:
+        return any(f.is_file() and f.suffix in exts for f in d.iterdir())
+    except OSError:
+        return False
+
+
+def scope_dirs(root: Path, cfg: dict):
+    """Yield every in-scope directory under the include roots.
+
+    In-scope = directly contains code files, or already has a doc. The root
+    directory is always in scope so there is a top of the tree.
+    """
+    doc = cfg["doc_name"]
+    roots = [root / inc for inc in cfg["include"]]
+    seen: set[Path] = set()
+    for base in roots:
+        if not base.exists():
+            continue
+        for dirpath, dirnames, _ in os.walk(base):
+            d = Path(dirpath)
+            rel = d.relative_to(root)
+            # prune excluded dirs in-place so os.walk doesn't descend
+            dirnames[:] = [
+                n for n in dirnames
+                if not is_excluded((rel / n), cfg)
+            ]
+            if is_excluded(rel, cfg):
+                continue
+            if d in seen:
+                continue
+            if d == root or dir_has_code(d, cfg) or (d / doc).exists():
+                seen.add(d)
+                yield d
+
+
+# ---------- summaries / index ----------
+
+def summary_of(doc_path: Path) -> str:
+    """First plain prose line of a doc - the one-line purpose.
+
+    Convention: the first non-empty line that is not a heading, list item,
+    blockquote, code fence, or a dox marker. Truncated for the parent index.
+    """
+    if not doc_path.exists():
+        return ""
+    in_index = False
+    for raw in doc_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line == INDEX_OPEN:
+            in_index = True
+            continue
+        if line == INDEX_CLOSE:
+            in_index = False
+            continue
+        if in_index or not line:
+            continue
+        if line.startswith(("#", "-", "*", ">", "```", "<!--", "|")):
+            continue
+        return line if len(line) <= 140 else line[:137] + "..."
+    return ""
+
+
+def child_areas(d: Path, root: Path, cfg: dict) -> list[tuple[str, str, bool]]:
+    """Immediate child subareas of d: (name, summary, documented)."""
+    doc = cfg["doc_name"]
+    out = []
+    try:
+        children = sorted(p for p in d.iterdir() if p.is_dir())
+    except OSError:
+        return out
+    for c in children:
+        rel = c.relative_to(root)
+        if is_excluded(rel, cfg):
+            continue
+        has_doc = (c / doc).exists()
+        has_code = dir_has_code(c, cfg)
+        # include if it is itself in scope or contains scoped descendants
+        if has_doc or has_code or _has_scoped_descendant(c, root, cfg):
+            out.append((c.name, summary_of(c / doc) if has_doc else "", has_doc))
+    return out
+
+
+def _has_scoped_descendant(d: Path, root: Path, cfg: dict) -> bool:
+    doc = cfg["doc_name"]
+    for dirpath, dirnames, _ in os.walk(d):
+        cur = Path(dirpath)
+        rel = cur.relative_to(root)
+        dirnames[:] = [n for n in dirnames if not is_excluded((rel / n), cfg)]
+        if is_excluded(rel, cfg):
+            continue
+        if cur != d and (dir_has_code(cur, cfg) or (cur / doc).exists()):
+            return True
+    return False
+
+
+def gen_index(d: Path, root: Path, cfg: dict) -> str:
+    doc = cfg["doc_name"]
+    areas = child_areas(d, root, cfg)
+    lines = [INDEX_OPEN,
+             "<!-- generated by `dox sync` - do not edit by hand -->",
+             "### Map"]
+    if not areas:
+        lines.append("_Leaf area - no subareas._")
+    else:
+        for name, summ, documented in areas:
+            link = f"[`{name}/`]({name}/{doc})" if documented else f"`{name}/`"
+            tail = f" - {summ}" if summ else (" - _(undocumented)_" if not documented else "")
+            lines.append(f"- {link}{tail}")
+    lines.append(INDEX_CLOSE)
+    return "\n".join(lines)
+
+
+def replace_index(text: str, block: str) -> str:
+    if INDEX_OPEN in text and INDEX_CLOSE in text:
+        pattern = re.compile(
+            re.escape(INDEX_OPEN) + r".*?" + re.escape(INDEX_CLOSE),
+            re.DOTALL,
+        )
+        return pattern.sub(lambda _: block, text, count=1)
+    sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+    return text + sep + block + "\n"
+
+
+# ---------- git ----------
+
+def git_changed(root: Path, cfg: dict) -> set[Path]:
+    """Files changed in the working tree + index, as paths relative to root."""
+    if not (root / ".git").exists():
+        return set()
+    out: set[Path] = set()
+    for args in (["diff", "--name-only"], ["diff", "--name-only", "--cached"]):
+        try:
+            r = subprocess.run(["git", *args], cwd=root,
+                               capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            return set()
+        for line in r.stdout.splitlines():
+            if line.strip():
+                out.add(Path(line.strip()))
+    return out
+
+
+# ---------- doc / link scanning ----------
+
+LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+
+
+def dangling_refs(doc_path: Path, cfg: dict) -> list[str]:
+    bad = []
+    base = doc_path.parent
+    in_index = False
+    for raw in doc_path.read_text(encoding="utf-8").splitlines():
+        s = raw.strip()
+        if s == INDEX_OPEN:
+            in_index = True
+            continue
+        if s == INDEX_CLOSE:
+            in_index = False
+            continue
+        if in_index:
+            continue  # index links are machine-generated and verified by sync
+        for m in LINK_RE.finditer(raw):
+            target = m.group(1).split("#")[0].strip()
+            if not target or target.startswith(("http://", "https://", "mailto:")):
+                continue
+            if not (base / target).exists():
+                bad.append(target)
+    return bad
+
+
+# ---------- commands ----------
+
+def cmd_init(root: Path, cfg: dict, args) -> int:
+    cfgp = root / CONFIG_NAME
+    if not cfgp.exists():
+        cfgp.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {CONFIG_NAME}")
+    doc = root / cfg["doc_name"]
+    if not doc.exists():
+        doc.write_text(ROOT_TEMPLATE, encoding="utf-8")
+        print(f"wrote {cfg['doc_name']}")
+    n = sync_all(root, cfg, write=True)
+    print(f"synced {n} doc(s). Next: write a one-line purpose at the top of each AGENTS.md, "
+          f"then `dox check`.")
+    return 0
+
+
+def sync_all(root: Path, cfg: dict, write: bool) -> int:
+    doc = cfg["doc_name"]
+    changed = 0
+    for d in scope_dirs(root, cfg):
+        dp = d / doc
+        if not dp.exists():
+            continue
+        old = dp.read_text(encoding="utf-8")
+        new = replace_index(old, gen_index(d, root, cfg))
+        if new != old:
+            changed += 1
+            if write:
+                dp.write_text(new, encoding="utf-8")
+    return changed
+
+
+def cmd_sync(root: Path, cfg: dict, args) -> int:
+    n = sync_all(root, cfg, write=True)
+    print(f"dox: synced index in {n} doc(s)")
+    return 0
+
+
+def cmd_check(root: Path, cfg: dict, args) -> int:
+    doc = cfg["doc_name"]
+    hard: list[str] = []
+    warn: list[str] = []
+
+    # missing docs for code-bearing dirs
+    if cfg["require_docs_for_code_dirs"]:
+        for d in scope_dirs(root, cfg):
+            if (dir_has_code(d, cfg) or d == root) and not (d / doc).exists():
+                hard.append(f"MISSING   {d.relative_to(root)}/ has code but no {doc}")
+
+    # stale index + dangling refs
+    for d in scope_dirs(root, cfg):
+        dp = d / doc
+        if not dp.exists():
+            continue
+        old = dp.read_text(encoding="utf-8")
+        if replace_index(old, gen_index(d, root, cfg)) != old:
+            hard.append(f"STALE     {dp.relative_to(root)} index out of date (run `dox sync`)")
+        for ref in dangling_refs(dp, cfg):
+            hard.append(f"DANGLING  {dp.relative_to(root)} -> {ref} (missing)")
+
+    # prose drift: code in a dir changed but its doc did not (git only)
+    changed = git_changed(root, cfg)
+    if changed:
+        exts = set(cfg["code_exts"])
+        touched_docs = {c for c in changed if c.name == doc}
+        flagged: set[Path] = set()
+        for c in changed:
+            if c.suffix not in exts:
+                continue
+            d = (root / c).parent
+            rel_doc = (d / doc).relative_to(root)
+            if (d / doc).exists() and rel_doc not in touched_docs and rel_doc not in flagged:
+                flagged.add(rel_doc)
+                warn.append(f"PROSE?    {rel_doc} unchanged but code in {d.relative_to(root)}/ changed")
+
+    for w in warn:
+        print(f"dox: warn  {w}")
+    for h in hard:
+        print(f"dox: ERROR {h}")
+
+    if hard:
+        print(f"\ndox: {len(hard)} hard issue(s), {len(warn)} warning(s)")
+        return 1
+    if args.strict and warn:
+        print(f"\ndox: {len(warn)} warning(s) (strict mode)")
+        return 1
+    print(f"dox: ok ({len(warn)} warning(s))" if warn else "dox: ok")
+    return 0
+
+
+def cmd_context(root: Path, cfg: dict, args) -> int:
+    doc = cfg["doc_name"]
+    target = Path(args.path)
+    if not target.is_absolute():
+        target = (Path.cwd() / target)
+    target = target.resolve()
+    base = target if target.is_dir() else target.parent
+    try:
+        rel = base.relative_to(root)
+    except ValueError:
+        rel = Path(".")
+    chain = []
+    cur = root
+    for part in ("", *rel.parts):
+        cur = cur / part if part else cur
+        dp = cur / doc
+        if dp.exists():
+            chain.append(dp)
+    if not chain:
+        return 0
+    for dp in chain:
+        body = dp.read_text(encoding="utf-8")
+        print(f"===== {dp.relative_to(root)} =====")
+        print(body.rstrip())
+        print()
+    return 0
+
+
+ROOT_TEMPLATE = f"""# Project
+
+One-line purpose of this repository goes here (this line feeds the parent index).
+
+## Conventions
+- Document stable contracts, not history. Keep each {DOC_NAME_DEFAULT} concise and current.
+- Before editing a path, read the {DOC_NAME_DEFAULT} chain from here down to it (`dox context <path>`).
+- After a meaningful change, update the affected {DOC_NAME_DEFAULT} prose. `dox sync` handles the index.
+
+{INDEX_OPEN}
+{INDEX_CLOSE}
+"""
+
+
+def die(msg: str) -> None:
+    print(f"dox: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="dox", description="deterministic AGENTS.md tree engine")
+    ap.add_argument("-C", dest="chdir", default=".", help="run as if started in this dir")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("init", help="scaffold config + root doc")
+    sub.add_parser("sync", help="regenerate index blocks")
+    pc = sub.add_parser("check", help="report drift")
+    pc.add_argument("--strict", action="store_true", help="treat warnings as failures")
+    pctx = sub.add_parser("context", help="print root->path doc chain")
+    pctx.add_argument("path", help="file or directory the agent is about to touch")
+    args = ap.parse_args(argv)
+
+    start = Path(args.chdir).resolve()
+    root = find_root(start)
+    cfg = load_config(root)
+    fn = {"init": cmd_init, "sync": cmd_sync, "check": cmd_check, "context": cmd_context}[args.cmd]
+    return fn(root, cfg, args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

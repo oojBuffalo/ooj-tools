@@ -1,0 +1,46 @@
+{
+  "doc_name": "AGENTS.md",
+  "include": [
+    "."
+  ],
+  "exclude": [
+    ".git",
+    "node_modules",
+    "dist",
+    "build",
+    "out",
+    "target",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".next",
+    ".cache",
+    "coverage"
+  ],
+  "code_exts": [
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".go",
+    ".rs",
+    ".java",
+    ".kt",
+    ".rb",
+    ".php",
+    ".c",
+    ".cc",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".cs",
+    ".swift",
+    ".scala",
+    ".sh",
+    ".sql"
+  ],
+  "require_docs_for_code_dirs": true
+}
