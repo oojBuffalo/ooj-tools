@@ -5,29 +5,29 @@
 # remember to read them. This is job J1 (load the right docs), mechanised.
 #
 # Wire in .claude/settings.json under hooks.PreToolUse (see settings.snippet.json).
+# Node-only: the engine and the JSON munging both run on the Node the harness
+# already has - no extra runtime dependency.
 set -euo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
-DOX="$ROOT/dox/bin/dox"
-[ -x "$DOX" ] || DOX="$ROOT/bin/dox"   # fallback if dox lives at repo root
+
+DOX=()
+if command -v dox >/dev/null 2>&1; then
+  DOX=(dox)
+else
+  for c in "$ROOT/dox/dist/cli.js" "$ROOT/dist/cli.js" "$ROOT/node_modules/@dox/cli/dist/cli.js"; do
+    [ -f "$c" ] && { DOX=(node "$c"); break; }
+  done
+fi
+[ ${#DOX[@]} -gt 0 ] || exit 0
 
 input="$(cat)"
 # Extract the target path from the tool input JSON (file_path for Edit/Write).
-path="$(printf '%s' "$input" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("tool_input",{}).get("file_path",""))' 2>/dev/null || true)"
+path="$(printf '%s' "$input" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write((JSON.parse(d).tool_input||{}).file_path||"")}catch{}})' 2>/dev/null || true)"
 [ -n "$path" ] || exit 0
-[ -x "$DOX" ] || exit 0
 
-ctx="$(python3 "$DOX" context "$path" 2>/dev/null || true)"
+ctx="$("${DOX[@]}" context "$path" 2>/dev/null || true)"
 [ -n "$ctx" ] || exit 0
 
 # Feed the chain back as additional context for this tool call.
-python3 - "$ctx" <<'PY'
-import json, sys
-ctx = sys.argv[1]
-print(json.dumps({
-    "hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "additionalContext": "Local AGENTS.md contracts for this path (dox):\n\n" + ctx,
-    }
-}))
-PY
+node -e 'const ctx=process.argv[1];process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:"Local AGENTS.md contracts for this path (dox):\n\n"+ctx}}))' "$ctx"

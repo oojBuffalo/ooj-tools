@@ -1,0 +1,35 @@
+{
+  "name": "@dox/cli",
+  "version": "0.1.0",
+  "description": "Deterministic AGENTS.md tree engine - keeps a hierarchy of docs as a code map so coding agents load only the relevant ones.",
+  "type": "module",
+  "bin": {
+    "dox": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "hooks",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "check": "node dist/cli.js check",
+    "sync": "node dist/cli.js sync"
+  },
+  "keywords": [
+    "agents",
+    "agents.md",
+    "documentation",
+    "coding-agent",
+    "context"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

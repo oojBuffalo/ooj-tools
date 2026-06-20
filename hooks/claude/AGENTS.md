@@ -9,11 +9,11 @@ Parent: `hooks/`. Owns the Claude-specific hook scripts and the settings snippet
 ## Local contracts (rules)
 - `dox-context.sh` (PreToolUse on Edit|Write|MultiEdit) emits `hookSpecificOutput.additionalContext` only - it must never block.
 - `dox-gate.sh` (Stop) may auto-run `dox sync` (deterministic) and must block (exit 2) only on hard drift, never on prose drift.
-- Hook scripts resolve the engine via `$CLAUDE_PROJECT_DIR`; they must no-op silently if the engine is absent.
+- Hook scripts resolve the engine via `$CLAUDE_PROJECT_DIR` (prefer an installed `dox` bin, else `dist/cli.js`); they must no-op silently if the engine is absent.
 
 ## Work guidance
 - Wire both hooks by merging `settings.snippet.json` into `.claude/settings.json`.
-- Keep scripts POSIX-bash and dependency-free apart from `python3`.
+- Keep scripts POSIX-bash; the only runtime dependency is `node` (used for both the engine and JSON munging).
 
 ## Test & verify
 - Pipe a sample PreToolUse JSON into `dox-context.sh` and confirm valid `additionalContext` JSON.

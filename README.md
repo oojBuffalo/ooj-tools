@@ -26,6 +26,18 @@ J1 and J2 are pure functions of the path and the filesystem, so they're scripted
 and deterministic. J3 is the only generative step, and it's gated behind a
 deterministic check.
 
+## Install / build
+
+The engine is a zero-dependency TypeScript package that runs on Node - the
+language the agent harnesses themselves are built in, so it's already present
+wherever a coding agent runs (and `npx`-installable, like the original DOX).
+
+```
+npm install        # dev deps (typescript only)
+npm run build      # compile src/ -> dist/
+node dist/cli.js   # or, once published / linked:  npx dox
+```
+
 ## CLI
 
 ```
@@ -116,4 +128,5 @@ The CLI is the integration point; adding a harness means wiring `dox context`
 research: Codex CLI hooks, Cursor rules/`.cursor`, OpenCode, Aider's lint/commit
 hooks. The universal fallback is always the git layer above.
 
-No dependencies — Python 3 stdlib only.
+Zero runtime dependencies — TypeScript compiled to ESM, run on the Node the
+agent harness already provides.

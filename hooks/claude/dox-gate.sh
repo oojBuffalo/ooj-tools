@@ -8,13 +8,20 @@
 set -euo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
-DOX="$ROOT/dox/bin/dox"
-[ -x "$DOX" ] || DOX="$ROOT/bin/dox"
-[ -x "$DOX" ] || exit 0
 
-python3 "$DOX" sync >/dev/null 2>&1 || true
+DOX=()
+if command -v dox >/dev/null 2>&1; then
+  DOX=(dox)
+else
+  for c in "$ROOT/dox/dist/cli.js" "$ROOT/dist/cli.js" "$ROOT/node_modules/@dox/cli/dist/cli.js"; do
+    [ -f "$c" ] && { DOX=(node "$c"); break; }
+  done
+fi
+[ ${#DOX[@]} -gt 0 ] || exit 0
 
-out="$(python3 "$DOX" check 2>&1 || true)"
+"${DOX[@]}" sync >/dev/null 2>&1 || true
+
+out="$("${DOX[@]}" check 2>&1 || true)"
 if printf '%s' "$out" | grep -q 'dox: ERROR'; then
   {
     echo "dox: documentation drift must be resolved before finishing."

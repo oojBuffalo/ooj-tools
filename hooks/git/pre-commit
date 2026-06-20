@@ -4,20 +4,29 @@
 # blocks the commit on hard drift. This is the layer that makes dox portable
 # across agents: enforcement lives at the VCS boundary, not inside one harness.
 #
-# Install:  ln -sf ../../dox/hooks/git/pre-commit .git/hooks/pre-commit
-#   (or copy it; or point core.hooksPath at hooks/git)
+# Install:  cp dox/hooks/git/pre-commit .git/hooks/pre-commit && chmod +x "$_"
+#   (or point core.hooksPath at hooks/git)
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-DOX="$ROOT/dox/bin/dox"
-[ -x "$DOX" ] || DOX="$ROOT/bin/dox"
-[ -x "$DOX" ] || { echo "dox: engine not found, skipping"; exit 0; }
 
-python3 "$DOX" sync >/dev/null 2>&1 || true
+# Resolve the dox engine: prefer an installed `dox` bin, else a built dist/cli.js
+# (vendored at <repo>/dox, at the repo root, or in node_modules).
+DOX=()
+if command -v dox >/dev/null 2>&1; then
+  DOX=(dox)
+else
+  for c in "$ROOT/dox/dist/cli.js" "$ROOT/dist/cli.js" "$ROOT/node_modules/@dox/cli/dist/cli.js"; do
+    [ -f "$c" ] && { DOX=(node "$c"); break; }
+  done
+fi
+[ ${#DOX[@]} -gt 0 ] || { echo "dox: engine not found, skipping"; exit 0; }
+
+"${DOX[@]}" sync >/dev/null 2>&1 || true
 # Restage any AGENTS.md the sync touched so the commit stays consistent.
 git add -u ':(glob)**/AGENTS.md' 2>/dev/null || git add -u 2>/dev/null || true
 
-if ! python3 "$DOX" check; then
+if ! "${DOX[@]}" check; then
   echo ""
   echo "dox: commit blocked by documentation drift (see ERROR lines above)."
   echo "     run 'dox check' to inspect, fix the docs, then re-commit."

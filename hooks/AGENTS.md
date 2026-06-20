@@ -7,7 +7,8 @@ Enforcement adapters that wire the `dox` CLI into wherever edits happen, so the 
 Owned by the dox root. Each subfolder targets one execution surface (git, a specific agent harness).
 
 ## Local contracts (rules)
-- Every adapter calls the same `bin/dox` CLI - no adapter reimplements check/sync logic.
+- Every adapter resolves and calls the same dox CLI (an installed `dox` bin, else the built `dist/cli.js`) - no adapter reimplements check/sync logic.
+- Adapters depend only on Node (the engine) plus their host's native hook runner (bash); no other runtime.
 - Adapters are deterministic: the only side effect they may auto-apply is `dox sync`.
 - A hard-drift result (MISSING / DANGLING / FILEDOC / STALE) blocks; prose drift only warns.
 
