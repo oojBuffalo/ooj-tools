@@ -7,21 +7,30 @@
 # Prose-drift is surfaced as a non-blocking reminder.
 set -euo pipefail
 
-ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+# Target: the user's repo, where the AGENTS.md tree lives. The engine operates
+# on this (passed via `dox -C`), regardless of where the engine itself lives.
+TARGET="${CLAUDE_PROJECT_DIR:-$PWD}"
 
+# Engine: prefer an installed `dox` bin, else this plugin's bundled build
+# (CLAUDE_PLUGIN_ROOT, set when run as a Claude Code plugin), else a build
+# vendored inside the target repo (legacy / non-plugin install).
 DOX=()
 if command -v dox >/dev/null 2>&1; then
   DOX=(dox)
 else
-  for c in "$ROOT/dox/dist/cli.js" "$ROOT/dist/cli.js" "$ROOT/node_modules/@dox/cli/dist/cli.js"; do
-    [ -f "$c" ] && { DOX=(node "$c"); break; }
+  for c in \
+    "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/dist/cli.js}" \
+    "$TARGET/dox/dist/cli.js" \
+    "$TARGET/dist/cli.js" \
+    "$TARGET/node_modules/@dox/cli/dist/cli.js"; do
+    [ -n "$c" ] && [ -f "$c" ] && { DOX=(node "$c"); break; }
   done
 fi
 [ ${#DOX[@]} -gt 0 ] || exit 0
 
-"${DOX[@]}" sync >/dev/null 2>&1 || true
+"${DOX[@]}" -C "$TARGET" sync >/dev/null 2>&1 || true
 
-out="$("${DOX[@]}" check 2>&1 || true)"
+out="$("${DOX[@]}" -C "$TARGET" check 2>&1 || true)"
 if printf '%s' "$out" | grep -q 'dox: ERROR'; then
   {
     echo "dox: documentation drift must be resolved before finishing."

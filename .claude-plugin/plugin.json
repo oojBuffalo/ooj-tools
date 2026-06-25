@@ -1,0 +1,11 @@
+{
+  "name": "dox",
+  "version": "0.1.0",
+  "description": "Deterministic AGENTS.md tree engine. Injects the local AGENTS.md chain before edits (J1) and gates finishing on documentation drift (J3), so the doc map stays accurate mechanically rather than by good behavior.",
+  "author": {
+    "name": "Elijah Wilt",
+    "email": "elijahwilt.github@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": ["agents-md", "documentation", "context", "drift", "hooks"]
+}

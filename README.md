@@ -107,10 +107,15 @@ On commit it runs `dox sync` (auto-fixes + restages the index) then `dox check`,
 and blocks the commit on hard drift.
 
 ### Claude Code (in-loop — the most effective layer)
-Merge `dox/hooks/claude/settings.snippet.json` into `.claude/settings.json`:
+dox ships as a Claude Code plugin (`.claude-plugin/plugin.json` + `hooks/hooks.json`).
+Install it and both hooks register automatically — no settings to hand-edit:
 - **PreToolUse** on `Edit|Write|MultiEdit` → injects the `dox context` chain for the
   edited path, so the relevant contracts are *always* in context (J1, mechanised).
 - **Stop** → auto-`sync`, then blocks finishing on hard drift (J3 gate).
+
+The hooks resolve the engine from `${CLAUDE_PLUGIN_ROOT}` and operate on your repo via
+`dox -C "$CLAUDE_PROJECT_DIR"`. For a vendored (non-plugin) install, merge
+`dox/hooks/claude/settings.snippet.json` into `.claude/settings.json` instead.
 
 ### CI
 Run `dox check` as a job — a backstop if a hook was bypassed.

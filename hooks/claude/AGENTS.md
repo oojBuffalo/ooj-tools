@@ -1,18 +1,18 @@
 # Claude Code hooks
 
 ## Purpose
-In-loop enforcement for Claude Code: inject the relevant doc chain before edits and gate finishing on doc drift.
+In-loop enforcement for Claude Code: inject the relevant doc chain before edits and gate finishing on doc drift. Packaged as a Claude Code plugin (manifest + `hooks/hooks.json` at the repo root), so installing it registers both hooks automatically.
 
 ## Ownership
-Parent: `hooks/`. Owns the Claude-specific hook scripts and the settings snippet.
+Parent: `hooks/`. Owns the Claude-specific hook scripts and the manual settings snippet. The plugin manifest (`.claude-plugin/plugin.json`) and `hooks/hooks.json` live one level up at the repo root.
 
 ## Local contracts (rules)
 - `dox-context.sh` (PreToolUse on Edit|Write|MultiEdit) emits `hookSpecificOutput.additionalContext` only - it must never block.
 - `dox-gate.sh` (Stop) may auto-run `dox sync` (deterministic) and must block (exit 2) only on hard drift, never on prose drift.
-- Hook scripts resolve the engine via `$CLAUDE_PROJECT_DIR` (prefer an installed `dox` bin, else `dist/cli.js`); they must no-op silently if the engine is absent.
+- Engine and target are separate concerns: scripts resolve the engine binary (installed `dox`, else `$CLAUDE_PLUGIN_ROOT/dist/cli.js`, else a vendored `dist/cli.js`) but always operate on the user's repo by passing `dox -C "$CLAUDE_PROJECT_DIR"`. They must no-op silently if no engine is found.
 
 ## Work guidance
-- Wire both hooks by merging `settings.snippet.json` into `.claude/settings.json`.
+- Preferred wiring is the plugin: `hooks/hooks.json` (repo root) points both events at these scripts via `${CLAUDE_PLUGIN_ROOT}`. `settings.snippet.json` is the manual fallback for vendored, non-plugin installs.
 - Keep scripts POSIX-bash; the only runtime dependency is `node` (used for both the engine and JSON munging).
 
 ## Test & verify

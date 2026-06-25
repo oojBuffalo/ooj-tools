@@ -9,14 +9,23 @@
 # already has - no extra runtime dependency.
 set -euo pipefail
 
-ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
+# Target: the user's repo, where the AGENTS.md tree lives. The engine operates
+# on this (passed via `dox -C`), regardless of where the engine itself lives.
+TARGET="${CLAUDE_PROJECT_DIR:-$PWD}"
 
+# Engine: prefer an installed `dox` bin, else this plugin's bundled build
+# (CLAUDE_PLUGIN_ROOT, set when run as a Claude Code plugin), else a build
+# vendored inside the target repo (legacy / non-plugin install).
 DOX=()
 if command -v dox >/dev/null 2>&1; then
   DOX=(dox)
 else
-  for c in "$ROOT/dox/dist/cli.js" "$ROOT/dist/cli.js" "$ROOT/node_modules/@dox/cli/dist/cli.js"; do
-    [ -f "$c" ] && { DOX=(node "$c"); break; }
+  for c in \
+    "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/dist/cli.js}" \
+    "$TARGET/dox/dist/cli.js" \
+    "$TARGET/dist/cli.js" \
+    "$TARGET/node_modules/@dox/cli/dist/cli.js"; do
+    [ -n "$c" ] && [ -f "$c" ] && { DOX=(node "$c"); break; }
   done
 fi
 [ ${#DOX[@]} -gt 0 ] || exit 0
@@ -26,7 +35,7 @@ input="$(cat)"
 path="$(printf '%s' "$input" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write((JSON.parse(d).tool_input||{}).file_path||"")}catch{}})' 2>/dev/null || true)"
 [ -n "$path" ] || exit 0
 
-ctx="$("${DOX[@]}" context "$path" 2>/dev/null || true)"
+ctx="$("${DOX[@]}" -C "$TARGET" context "$path" 2>/dev/null || true)"
 [ -n "$ctx" ] || exit 0
 
 # Feed the chain back as additional context for this tool call.

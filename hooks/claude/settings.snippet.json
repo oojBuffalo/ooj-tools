@@ -1,5 +1,5 @@
 {
-  "//": "Merge this into .claude/settings.json. Paths assume dox lives at <repo>/dox; adjust if vendored elsewhere.",
+  "//": "Manual wiring for a vendored (non-plugin) install. Installing dox as a Claude Code plugin registers hooks/hooks.json automatically and needs none of this. Paths assume dox lives at <repo>/dox; adjust if vendored elsewhere.",
   "hooks": {
     "PreToolUse": [
       {
