@@ -1,0 +1,15 @@
+{
+  "name": "ooj-tools",
+  "description": "Plugins developed with agentic sensibilities in mind - tooling built for how coding agents actually work.",
+  "owner": {
+    "name": "Elijah Wilt",
+    "email": "elijahwilt.github@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "dox",
+      "source": "./",
+      "description": "Deterministic AGENTS.md tree engine: injects the local AGENTS.md chain before edits (J1) and gates finishing on documentation drift (J3)."
+    }
+  ]
+}

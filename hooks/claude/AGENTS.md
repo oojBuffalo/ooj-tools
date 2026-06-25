@@ -10,6 +10,7 @@ Parent: `hooks/`. Owns the Claude-specific hook scripts and the manual settings 
 - `dox-context.sh` (PreToolUse on Edit|Write|MultiEdit) emits `hookSpecificOutput.additionalContext` only - it must never block.
 - `dox-gate.sh` (Stop) may auto-run `dox sync` (deterministic) and must block (exit 2) only on hard drift, never on prose drift.
 - Engine and target are separate concerns: scripts resolve the engine binary (installed `dox`, else `$CLAUDE_PLUGIN_ROOT/dist/cli.js`, else a vendored `dist/cli.js`) but always operate on the user's repo by passing `dox -C "$CLAUDE_PROJECT_DIR"`. They must no-op silently if no engine is found.
+- Opt-in guard: both hooks exit 0 immediately unless the target repo has a `.dox.json` (written by `dox init`). This keeps a globally-installed plugin silent in repos that do not use dox - the CLI stays strict, but the auto-firing hooks only engage where dox was set up.
 
 ## Work guidance
 - Preferred wiring is the plugin: `hooks/hooks.json` (repo root) points both events at these scripts via `${CLAUDE_PLUGIN_ROOT}`. `settings.snippet.json` is the manual fallback for vendored, non-plugin installs.

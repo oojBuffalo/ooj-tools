@@ -11,6 +11,11 @@ set -euo pipefail
 # on this (passed via `dox -C`), regardless of where the engine itself lives.
 TARGET="${CLAUDE_PROJECT_DIR:-$PWD}"
 
+# Opt-in guard: only act in repos that use dox (a .dox.json, written by `dox
+# init`). Without this a globally-installed plugin would block Stop in every
+# unrelated repo. The CLI stays strict; this policy lives in the hook.
+[ -f "$TARGET/.dox.json" ] || exit 0
+
 # Engine: prefer an installed `dox` bin, else this plugin's bundled build
 # (CLAUDE_PLUGIN_ROOT, set when run as a Claude Code plugin), else a build
 # vendored inside the target repo (legacy / non-plugin install).
