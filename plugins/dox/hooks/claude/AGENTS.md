@@ -1,10 +1,10 @@
 # Claude Code hooks
 
 ## Purpose
-In-loop enforcement for Claude Code: inject the relevant doc chain before edits and gate finishing on doc drift. Packaged as a Claude Code plugin (manifest + `hooks/hooks.json` at the repo root), so installing it registers both hooks automatically.
+In-loop enforcement for Claude Code: inject the relevant doc chain before edits and gate finishing on doc drift. Packaged as a Claude Code plugin (manifest + `hooks/hooks.json` at the plugin root), so installing it registers both hooks automatically.
 
 ## Ownership
-Parent: `hooks/`. Owns the Claude-specific hook scripts and the manual settings snippet. The plugin manifest (`.claude-plugin/plugin.json`) and `hooks/hooks.json` live one level up at the repo root.
+Parent: `hooks/`. Owns the Claude-specific hook scripts and the manual settings snippet. The plugin manifest (`.claude-plugin/plugin.json`) and `hooks/hooks.json` live one level up at the plugin root.
 
 ## Local contracts (rules)
 - `dox-context.sh` (PreToolUse on Edit|Write|MultiEdit) emits `hookSpecificOutput.additionalContext` only - it must never block.
@@ -13,7 +13,7 @@ Parent: `hooks/`. Owns the Claude-specific hook scripts and the manual settings 
 - Opt-in guard: both hooks exit 0 immediately unless the target repo has a `.dox.json` (written by `dox init`). This keeps a globally-installed plugin silent in repos that do not use dox - the CLI stays strict, but the auto-firing hooks only engage where dox was set up.
 
 ## Work guidance
-- Preferred wiring is the plugin: `hooks/hooks.json` (repo root) points both events at these scripts via `${CLAUDE_PLUGIN_ROOT}`. `settings.snippet.json` is the manual fallback for vendored, non-plugin installs.
+- Preferred wiring is the plugin: `hooks/hooks.json` (plugin root) points both events at these scripts via `${CLAUDE_PLUGIN_ROOT}`. `settings.snippet.json` is the manual fallback for vendored, non-plugin installs.
 - Keep scripts POSIX-bash; the only runtime dependency is `node` (used for both the engine and JSON munging).
 
 ## Test & verify

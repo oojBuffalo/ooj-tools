@@ -13,7 +13,7 @@ You maintain a hierarchy of AGENTS.md files coupled to the codebase - one per fo
 Deterministic AGENTS.md tree engine - keeps a hierarchy of docs as a code map so agents load only the relevant ones.
 
 ## Ownership
-Top-level. Owns the CLI contract (`src/` -> `dist/`), the doc conventions, and repo-wide rules.
+The dox plugin root - one plugin in the `ooj-tools` marketplace collection (lives at `plugins/dox/`). Owns the CLI contract (`src/` -> `dist/`), the doc conventions, and this plugin's rules; it is the root of dox's own AGENTS.md tree.
 
 ## Local contracts (rules)
 - The engine is a zero-dependency TypeScript package (ESM); it runs on the Node the agent harness already has - matching the agentic-tooling ecosystem (npx-installable, like the original DOX).

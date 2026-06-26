@@ -14,7 +14,7 @@ Owned by the dox root. Each subfolder targets one execution surface (git, a spec
 
 ## Work guidance
 - New harness support goes in its own subfolder here (e.g. `hooks/codex/`), mirroring `hooks/claude/`.
-- The repo doubles as a Claude Code plugin: `.claude-plugin/plugin.json` (root) plus `hooks/hooks.json` register the `claude/` scripts via `${CLAUDE_PLUGIN_ROOT}`. Adapters resolve the engine from `${CLAUDE_PLUGIN_ROOT}` when present, else a vendored build.
+- This plugin ships for Claude Code: `.claude-plugin/plugin.json` (plugin root) plus `hooks/hooks.json` register the `claude/` scripts via `${CLAUDE_PLUGIN_ROOT}`. Adapters resolve the engine from `${CLAUDE_PLUGIN_ROOT}` when present, else a vendored build.
 
 ## Test & verify
 - Run the adapter against a known-dirty tree and confirm it blocks; against a clean tree and confirm it passes.

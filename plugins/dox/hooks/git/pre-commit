@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Agent-agnostic enforcement at the VCS boundary: runs for ANY committer -
+# Claude Code, Codex, Cursor, or a human. Gates every plugin subtree under
+# plugins/* that opts into dox (has a .dox.json), auto-fixing each index
+# (deterministic) and restaging it before blocking on hard drift. The dox
+# engine itself lives in plugins/dox.
+#
+# Install:  cp plugins/dox/hooks/git/pre-commit .git/hooks/pre-commit && chmod +x "$_"
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+# Resolve the dox engine once: prefer an installed `dox` bin, else the bundled
+# build in plugins/dox (or a top-level / node_modules build).
+DOX=()
+if command -v dox >/dev/null 2>&1; then
+  DOX=(dox)
+else
+  for c in "$ROOT/plugins/dox/dist/cli.js" "$ROOT/dist/cli.js" "$ROOT/node_modules/@dox/cli/dist/cli.js"; do
+    [ -f "$c" ] && { DOX=(node "$c"); break; }
+  done
+fi
+[ ${#DOX[@]} -gt 0 ] || { echo "dox: engine not found, skipping"; exit 0; }
+
+# Gate each plugin subtree that opts into dox. `-C <dir>` scopes the engine to
+# that subtree (findRoot lands on its .dox.json); the collection root is never
+# scanned, so it is not asked for a root AGENTS.md.
+status=0
+for cfg in "$ROOT"/plugins/*/.dox.json; do
+  [ -e "$cfg" ] || continue
+  dir="$(dirname "$cfg")"
+  "${DOX[@]}" -C "$dir" sync >/dev/null 2>&1 || true
+  "${DOX[@]}" -C "$dir" check || status=1
+done
+
+# Restage any AGENTS.md the sync touched so the commit stays consistent.
+git add -u ':(glob)**/AGENTS.md' 2>/dev/null || git add -u 2>/dev/null || true
+
+if [ "$status" -ne 0 ]; then
+  echo ""
+  echo "dox: commit blocked by documentation drift (see ERROR lines above)."
+  echo "     run 'dox check' to inspect, fix the docs, then re-commit."
+  exit 1
+fi
