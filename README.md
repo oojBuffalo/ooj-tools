@@ -22,10 +22,12 @@ lists them.
 ```
 
 (Or point at the GitHub repo: `/plugin marketplace add oojBuffalo/ooj-tools`.)
-Test the whole collection in one session without installing:
+Test a plugin in one session without installing — `--plugin-dir` loads a single
+plugin directory, not the marketplace root, so point it at `plugins/<name>`
+(repeat the flag per plugin to load more than one):
 
 ```
-claude --plugin-dir /Users/claw/projects/ooj-tools
+claude --plugin-dir /Users/claw/projects/ooj-tools/plugins/dox
 ```
 
 ## Adding a plugin
