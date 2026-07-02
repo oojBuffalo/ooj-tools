@@ -17,15 +17,15 @@ lists them.
 ## Install
 
 ```
-/plugin marketplace add /Users/claw/ooj-tools
+/plugin marketplace add /Users/claw/projects/ooj-tools
 /plugin install dox@ooj-tools
 ```
 
-(Or point at the GitHub repo once pushed: `/plugin marketplace add <owner>/ooj-tools`.)
+(Or point at the GitHub repo: `/plugin marketplace add oojBuffalo/ooj-tools`.)
 Test the whole collection in one session without installing:
 
 ```
-claude --plugin-dir /Users/claw/ooj-tools
+claude --plugin-dir /Users/claw/projects/ooj-tools
 ```
 
 ## Adding a plugin
@@ -39,3 +39,8 @@ If the plugin wants dox to maintain its own AGENTS.md tree, drop a `.dox.json`
 in its root (`dox init`) — the repo's `git` pre-commit gate
 ([`plugins/dox/hooks/git/pre-commit`](plugins/dox/hooks/git/pre-commit)) checks
 every `plugins/*/` that opts in.
+
+## License
+
+[MIT](LICENSE) for the collection; each plugin may carry its own license file
+(see [`plugins/dox/LICENSE`](plugins/dox/LICENSE)) if it differs.

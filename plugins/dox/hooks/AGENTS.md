@@ -11,6 +11,7 @@ Owned by the dox root. Each subfolder targets one execution surface (git, a spec
 - Adapters depend only on Node (the engine) plus their host's native hook runner (bash); no other runtime.
 - Adapters are deterministic: the only side effect they may auto-apply is `dox sync`.
 - A hard-drift result (MISSING / DANGLING / FILEDOC / STALE) blocks; prose drift only warns.
+- The git adapter additionally gates build freshness: any `plugins/*/tsconfig.json` with a committed `dist/` is rebuilt to a scratch dir and diffed; a mismatch blocks the commit (dist/, not src/, is what ships).
 
 ## Work guidance
 - New harness support goes in its own subfolder here (e.g. `hooks/codex/`), mirroring `hooks/claude/`.

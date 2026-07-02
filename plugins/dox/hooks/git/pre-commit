@@ -2,13 +2,16 @@
 # Agent-agnostic enforcement at the VCS boundary: runs for ANY committer -
 # Claude Code, Codex, Cursor, or a human. Gates every plugin subtree under
 # plugins/* that opts into dox (has a .dox.json), auto-fixing each index
-# (deterministic) and restaging it before blocking on hard drift. The dox
-# engine itself lives in plugins/dox.
+# (deterministic) and restaging it before blocking on hard drift. Also gates
+# any plugin that commits a compiled dist/ against a stale build, since dist/
+# (not src/) is what actually ships and runs. The dox engine itself lives in
+# plugins/dox.
 #
 # Install:  cp plugins/dox/hooks/git/pre-commit .git/hooks/pre-commit && chmod +x "$_"
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
+status=0
 
 # Resolve the dox engine once: prefer an installed `dox` bin, else the bundled
 # build in plugins/dox (or a top-level / node_modules build).
@@ -20,25 +23,47 @@ else
     [ -f "$c" ] && { DOX=(node "$c"); break; }
   done
 fi
-[ ${#DOX[@]} -gt 0 ] || { echo "dox: engine not found, skipping"; exit 0; }
 
-# Gate each plugin subtree that opts into dox. `-C <dir>` scopes the engine to
-# that subtree (findRoot lands on its .dox.json); the collection root is never
-# scanned, so it is not asked for a root AGENTS.md.
-status=0
-for cfg in "$ROOT"/plugins/*/.dox.json; do
+if [ ${#DOX[@]} -gt 0 ]; then
+  # Gate each plugin subtree that opts into dox. `-C <dir>` scopes the engine to
+  # that subtree (findRoot lands on its .dox.json); the collection root is never
+  # scanned, so it is not asked for a root AGENTS.md.
+  for cfg in "$ROOT"/plugins/*/.dox.json; do
+    [ -e "$cfg" ] || continue
+    dir="$(dirname "$cfg")"
+    "${DOX[@]}" -C "$dir" sync >/dev/null 2>&1 || true
+    "${DOX[@]}" -C "$dir" check || status=1
+  done
+  # Restage any AGENTS.md the sync touched so the commit stays consistent.
+  git add -u ':(glob)**/AGENTS.md' 2>/dev/null || git add -u 2>/dev/null || true
+else
+  echo "dox: engine not found, skipping documentation gate"
+fi
+
+# Build-freshness gate: generic over any plugins/*/tsconfig.json with a
+# committed dist/ - the only build tool this collection's plugins use so far.
+# Rebuilds to a scratch dir and diffs against the committed dist/; a mismatch
+# means someone edited src/ and forgot to rebuild before committing.
+for cfg in "$ROOT"/plugins/*/tsconfig.json; do
   [ -e "$cfg" ] || continue
   dir="$(dirname "$cfg")"
-  "${DOX[@]}" -C "$dir" sync >/dev/null 2>&1 || true
-  "${DOX[@]}" -C "$dir" check || status=1
+  [ -d "$dir/dist" ] || continue
+  if [ ! -d "$dir/node_modules" ]; then
+    echo "dox: $dir has no node_modules, skipping build-freshness check"
+    continue
+  fi
+  tmp="$(mktemp -d)"
+  (cd "$dir" && npx --no-install tsc -p tsconfig.json --outDir "$tmp") >/dev/null 2>&1 || true
+  if ! diff -rq "$dir/dist" "$tmp" >/dev/null 2>&1; then
+    echo "dox: $dir/dist is stale relative to src/ (run 'npm run build' in $dir)."
+    status=1
+  fi
+  rm -rf "$tmp"
 done
-
-# Restage any AGENTS.md the sync touched so the commit stays consistent.
-git add -u ':(glob)**/AGENTS.md' 2>/dev/null || git add -u 2>/dev/null || true
 
 if [ "$status" -ne 0 ]; then
   echo ""
-  echo "dox: commit blocked by documentation drift (see ERROR lines above)."
-  echo "     run 'dox check' to inspect, fix the docs, then re-commit."
+  echo "dox: commit blocked (documentation drift or a stale build - see above)."
+  echo "     run 'dox check' / 'npm run build' as needed, then re-commit."
   exit 1
 fi

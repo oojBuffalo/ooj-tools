@@ -7,5 +7,7 @@
     "email": "elijahwilt.github@gmail.com"
   },
   "license": "MIT",
+  "homepage": "https://github.com/oojBuffalo/ooj-tools/tree/master/plugins/dox",
+  "repository": "https://github.com/oojBuffalo/ooj-tools",
   "keywords": ["agents-md", "documentation", "context", "drift", "hooks"]
 }
