@@ -13,12 +13,18 @@ skillOverrides / disabledPlugins / enabledPlugins keys), a marker at
 .claude/plugin-configure.json, and a .git/info/exclude entry for the marker.
 """
 
+import argparse
 import json
 import os
+import subprocess
+import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 SELF_PLUGIN_ID = "plugin-configure@ooj-tools"
+PLUGIN_VERSION = "0.1.0"
+MARKER_RELPATH = ".claude/plugin-configure.json"
 
 _SCOPE_RANK = {"user": 1, "project": 2, "local": 3}
 
@@ -123,6 +129,195 @@ def ensure_profiles(path):
     return json.loads(path.read_text()), created
 
 
+def find_repo_root(cwd):
+    """Return the git repo root containing cwd, or None outside a repo.
+
+    Args:
+        cwd: Directory to resolve from.
+
+    Returns:
+        Path of the repo toplevel, or None.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    return Path(out) if out else None
+
+
+def discover_skills(skill_dirs):
+    """Collect skill names from skills directories.
+
+    Args:
+        skill_dirs: Iterable of directories to scan; missing ones are skipped.
+
+    Returns:
+        Set of names of directories (or symlinks to directories) found,
+        ignoring dotfile entries and plain files.
+    """
+    names = set()
+    for skill_dir in skill_dirs:
+        if not skill_dir.is_dir():
+            continue
+        for entry in skill_dir.iterdir():
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                names.add(entry.name)
+    return names
+
+
+def load_plugin_records():
+    """Read the installed-plugin inventory from the claude CLI.
+
+    Returns:
+        The parsed record list from `claude plugin list --json`, or None when
+        the CLI is missing, fails, or returns an unexpected shape (a warning
+        is printed to stderr; plugin settings are then left untouched).
+    """
+    try:
+        out = subprocess.run(
+            ["claude", "plugin", "list", "--json"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        records = json.loads(out)
+    except (subprocess.CalledProcessError, OSError, json.JSONDecodeError) as exc:
+        print(f"warning: could not read plugin inventory ({exc}); "
+              "leaving plugin settings untouched", file=sys.stderr)
+        return None
+    if not isinstance(records, list):
+        print("warning: unexpected `claude plugin list --json` output; "
+              "leaving plugin settings untouched", file=sys.stderr)
+        return None
+    return records
+
+
+def utc_now_iso():
+    """Return the current UTC time as an ISO-8601 string (second precision)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write_marker(root, marker):
+    """Write the idempotency marker under root.
+
+    Args:
+        root: Target root directory (repo root or cwd).
+        marker: JSON-serializable marker payload.
+
+    Returns:
+        The marker file Path.
+    """
+    path = root / MARKER_RELPATH
+    atomic_write_json(path, marker)
+    return path
+
+
+def ensure_git_exclude(root):
+    """Add the marker path to the repo's .git/info/exclude (once).
+
+    No-op outside a git repo. Uses `git rev-parse --git-path` so worktrees
+    resolve to the correct exclude file.
+
+    Args:
+        root: Directory inside the repo (normally the repo root).
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--git-path", "info/exclude"],
+            cwd=str(root), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, OSError):
+        return
+    exclude = Path(out)
+    if not exclude.is_absolute():
+        exclude = root / exclude
+    lines = exclude.read_text().splitlines() if exclude.exists() else []
+    if MARKER_RELPATH in lines:
+        return
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    with exclude.open("a") as fh:
+        fh.write(MARKER_RELPATH + "\n")
+
+
+def main(argv=None):
+    """CLI entry point.
+
+    Args:
+        argv: Argument list (defaults to sys.argv[1:]).
+
+    Returns:
+        Process exit code: 0 on success, 2 on user error.
+    """
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("profile", nargs="?", help="profile name to apply")
+    parser.add_argument("--skip", action="store_true",
+                        help="record a skip marker and exit")
+    parser.add_argument("--bootstrap-only", action="store_true",
+                        help="ensure profiles.json exists, list profiles, exit")
+    args = parser.parse_args(argv)
+
+    profiles_doc, created = ensure_profiles(PROFILES_PATH)
+    profiles = profiles_doc.get("profiles", {})
+    if created:
+        print(f"bootstrapped starter profiles at {PROFILES_PATH}")
+
+    if args.bootstrap_only:
+        for name in sorted(profiles):
+            print(f"{name}: {profiles[name].get('description', '')}")
+        return 0
+
+    root = find_repo_root(Path.cwd()) or Path.cwd()
+
+    if args.skip:
+        marker = write_marker(root, {"skipped": True, "appliedAt": utc_now_iso()})
+        ensure_git_exclude(root)
+        print(f"skip recorded at {marker}; the session nudge is silenced here")
+        return 0
+
+    if not args.profile or args.profile not in profiles:
+        names = ", ".join(sorted(profiles))
+        print(f"error: unknown profile {args.profile!r}; available: {names}",
+              file=sys.stderr)
+        return 2
+
+    spec = profiles[args.profile]
+    discovered = discover_skills(
+        [Path.home() / ".claude" / "skills", root / ".claude" / "skills"])
+    overrides = compute_skill_overrides(discovered, spec.get("skills", []))
+
+    records = load_plugin_records()
+    if records is None:
+        disabled, enabled = [], []
+    else:
+        disabled, enabled = compute_plugin_arrays(
+            effective_plugin_state(records), spec.get("plugins", []))
+
+    settings_path = root / ".claude" / "settings.local.json"
+    try:
+        existing = (json.loads(settings_path.read_text())
+                    if settings_path.exists() else {})
+    except json.JSONDecodeError as exc:
+        print(f"error: {settings_path} is not valid JSON ({exc}); "
+              "fix it and re-run", file=sys.stderr)
+        return 2
+
+    atomic_write_json(settings_path, merge_settings(
+        existing, overrides, disabled, enabled, records is not None))
+    write_marker(root, {"profile": args.profile, "appliedAt": utc_now_iso(),
+                        "pluginVersion": PLUGIN_VERSION})
+    ensure_git_exclude(root)
+
+    print(f"applied profile {args.profile!r} to {settings_path}")
+    print(f"  skills off: {len(overrides)}  plugins disabled: {len(disabled)}"
+          f"  plugins enabled: {len(enabled)}")
+    print("  takes effect from the next Claude Code session in this directory")
+    return 0
+
+
 def effective_plugin_state(records):
     """Collapse `claude plugin list --json` records into effective enabled state.
 
@@ -207,3 +402,7 @@ def merge_settings(existing, overrides, disabled, enabled, plugins_known):
             else:
                 merged.pop(key, None)
     return merged
+
+
+if __name__ == "__main__":
+    sys.exit(main())

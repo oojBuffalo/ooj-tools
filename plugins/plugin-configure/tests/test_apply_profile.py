@@ -3,12 +3,14 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+APPLY = Path(__file__).resolve().parents[1] / "scripts" / "apply_profile.py"
 import apply_profile
 
 
@@ -173,6 +175,147 @@ class AtomicWriteJsonTests(unittest.TestCase):
             path.write_text("{\"old\": true}")
             apply_profile.atomic_write_json(path, {"new": True})
             self.assertEqual(json.loads(path.read_text()), {"new": True})
+
+
+class DiscoverSkillsTests(unittest.TestCase):
+    def test_dirs_and_symlinked_dirs_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "skills" / "real-skill").mkdir(parents=True)
+            (root / "elsewhere" / "linked-skill").mkdir(parents=True)
+            (root / "skills" / "linked-skill").symlink_to(root / "elsewhere" / "linked-skill")
+            (root / "skills" / ".hidden").mkdir()
+            (root / "skills" / "stray-file.md").write_text("not a skill")
+            names = apply_profile.discover_skills([root / "skills", root / "missing"])
+            self.assertEqual(names, {"real-skill", "linked-skill"})
+
+
+class GitHelpersTests(unittest.TestCase):
+    def _make_repo(self, tmp):
+        repo = Path(tmp) / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        return repo
+
+    def test_find_repo_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._make_repo(tmp)
+            sub = repo / "a" / "b"
+            sub.mkdir(parents=True)
+            self.assertEqual(apply_profile.find_repo_root(sub).resolve(), repo.resolve())
+            outside = Path(tmp) / "plain"
+            outside.mkdir()
+            self.assertIsNone(apply_profile.find_repo_root(outside))
+
+    def test_ensure_git_exclude_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._make_repo(tmp)
+            apply_profile.ensure_git_exclude(repo)
+            apply_profile.ensure_git_exclude(repo)
+            exclude = repo / ".git" / "info" / "exclude"
+            lines = exclude.read_text().splitlines()
+            self.assertEqual(lines.count(apply_profile.MARKER_RELPATH), 1)
+
+    def test_ensure_git_exclude_noop_outside_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            apply_profile.ensure_git_exclude(Path(tmp))  # must not raise
+            self.assertFalse((Path(tmp) / ".git").exists())
+
+
+FAKE_PLUGIN_RECORDS = [
+    {"id": "keep@m", "enabled": True, "scope": "user"},
+    {"id": "drop@m", "enabled": True, "scope": "user"},
+    {"id": "wake@m", "enabled": False, "scope": "user"},
+    {"id": apply_profile.SELF_PLUGIN_ID, "enabled": True, "scope": "user"},
+]
+
+
+class CliEndToEndTests(unittest.TestCase):
+    """Run apply_profile.py as a subprocess against a fake HOME, repo and claude CLI."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        tmp = Path(self._tmp.name)
+        self.home = tmp / "home"
+        for skill in ("alpha-skill", "beta-skill", "kept-skill"):
+            (self.home / ".claude" / "skills" / skill).mkdir(parents=True)
+        self.repo = tmp / "repo"
+        self.repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        bindir = tmp / "bin"
+        bindir.mkdir()
+        fake = bindir / "claude"
+        fake.write_text("#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % json.dumps(FAKE_PLUGIN_RECORDS))
+        fake.chmod(0o755)
+        profiles = {
+            "version": 1,
+            "profiles": {
+                "test-profile": {
+                    "description": "fixture",
+                    "skills": ["kept-skill"],
+                    "plugins": ["keep@m", "wake@m"],
+                }
+            },
+        }
+        profiles_path = self.home / ".claude" / "plugin-configure" / "profiles.json"
+        profiles_path.parent.mkdir(parents=True)
+        profiles_path.write_text(json.dumps(profiles))
+        self.env = dict(os.environ, HOME=str(self.home),
+                        PATH=f"{bindir}:{os.environ['PATH']}")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def run_apply(self, *args):
+        return subprocess.run(
+            [sys.executable, str(APPLY), *args],
+            cwd=str(self.repo), env=self.env, capture_output=True, text=True,
+        )
+
+    def test_apply_profile_writes_everything(self):
+        (self.repo / ".claude").mkdir()
+        (self.repo / ".claude" / "settings.local.json").write_text(
+            json.dumps({"permissions": {"allow": ["Bash(ls *)"]}}))
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        settings = json.loads((self.repo / ".claude" / "settings.local.json").read_text())
+        self.assertEqual(settings["permissions"], {"allow": ["Bash(ls *)"]})
+        self.assertEqual(settings["skillOverrides"],
+                         {"alpha-skill": "off", "beta-skill": "off"})
+        self.assertEqual(settings["disabledPlugins"], ["drop@m"])
+        self.assertEqual(settings["enabledPlugins"], ["wake@m"])
+        marker = json.loads((self.repo / ".claude" / "plugin-configure.json").read_text())
+        self.assertEqual(marker["profile"], "test-profile")
+        self.assertIn("appliedAt", marker)
+        self.assertEqual(marker["pluginVersion"], apply_profile.PLUGIN_VERSION)
+        exclude = (self.repo / ".git" / "info" / "exclude").read_text()
+        self.assertIn(apply_profile.MARKER_RELPATH, exclude)
+
+    def test_skip_writes_only_marker(self):
+        result = self.run_apply("--skip")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        marker = json.loads((self.repo / ".claude" / "plugin-configure.json").read_text())
+        self.assertTrue(marker["skipped"])
+        self.assertFalse((self.repo / ".claude" / "settings.local.json").exists())
+
+    def test_unknown_profile_errors(self):
+        result = self.run_apply("nope")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("test-profile", result.stderr)
+
+    def test_bootstrap_only_lists_profiles(self):
+        result = self.run_apply("--bootstrap-only")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("test-profile", result.stdout)
+        self.assertFalse((self.repo / ".claude").exists())
+
+    def test_invalid_settings_json_aborts_cleanly(self):
+        (self.repo / ".claude").mkdir()
+        broken = self.repo / ".claude" / "settings.local.json"
+        broken.write_text("{not json")
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(broken.read_text(), "{not json")
 
 
 if __name__ == "__main__":
