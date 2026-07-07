@@ -18,6 +18,7 @@ manifests at [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json
 | [`dox`](plugins/dox/) | Deterministic AGENTS.md tree engine: injects the local AGENTS.md chain before edits (J1) and gates finishing on documentation drift (J3). |
 | [`transcripts`](plugins/transcripts/) | Worktree-safe Claude Code and Codex transcript archives with configurable verbosity. |
 | [`spec-to-tasks`](plugins/spec-to-tasks/) | Turn a PRD, spec, or MVP doc into a readable markdown task tree: parse into tasks, score complexity, and expand into subtasks — native skills, no MCP server or API keys. |
+| [`plugin-configure`](plugins/plugin-configure/) | Cold-start profile setup: offers a curated skill/plugin profile on first launch in an unconfigured repo and writes it to `.claude/settings.local.json`. |
 
 ## Install
 
