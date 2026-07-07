@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A plugin that, on first launch in an unconfigured git repo, stamps a curated skill/plugin profile into `.claude/settings.local.json` so new repos don't start with all 42 personal skills and 19 plugins on.
+**Goal:** A plugin that, on first launch in an unconfigured git repo, writes a curated skill/plugin profile into `.claude/settings.local.json` so new repos don't start with all 42 personal skills and 19 plugins on.
 
-**Architecture:** Three parts: a deterministic python3 engine (`scripts/stamp.py`) that discovers installed skills/plugins and merge-writes the repo-local settings + a marker file; a SessionStart hook that nudges the model only in unconfigured git repos; and a slash command (`/plugin-configure:configure`) holding the single interactive flow (profile pick via AskUserQuestion → run engine). Profiles are user-level allowlists in `~/.claude/plugin-configure/profiles.json`, bootstrapped on first run.
+**Architecture:** Three parts: a deterministic python3 engine (`scripts/apply_profile.py`) that discovers installed skills/plugins and merge-writes the repo-local settings + a marker file; a SessionStart hook that nudges the model only in unconfigured git repos; and a slash command (`/plugin-configure:configure`) holding the single interactive flow (profile pick via AskUserQuestion → run engine). Profiles are user-level allowlists in `~/.claude/plugin-configure/profiles.json`, bootstrapped on first run.
 
 **Tech Stack:** python3 (stdlib only), bash, Claude Code plugin bundle (hooks.json / commands / `${CLAUDE_PLUGIN_ROOT}`).
 
@@ -14,10 +14,10 @@
 
 - Work ONLY on branch `feat/plugin-configure` in the worktree `/Users/ooj/Fun/code/ooj-tools/.claude/worktrees/plugin-configure/` (repo root for all paths below). Never touch `master`.
 - No AI attribution anywhere in commit messages (no `Co-Authored-By: Claude`, no `Generated with`, no session links). End commits on the last real content line.
-- `scripts/stamp.py`: python3 **stdlib only**, Google-style docstrings (Args/Returns/Raises).
+- `scripts/apply_profile.py`: python3 **stdlib only**, Google-style docstrings (Args/Returns/Raises).
 - The hook must ALWAYS exit 0 and stay silent on every non-nudge path — it must never block or slow a session.
-- The stamp owns exactly three settings keys: `skillOverrides`, `disabledPlugins`, `enabledPlugins`. Every other key in `.claude/settings.local.json` must survive a stamp byte-for-byte in value.
-- The stamp never disables `plugin-configure@ooj-tools` (self-preservation).
+- The script owns exactly three settings keys: `skillOverrides`, `disabledPlugins`, `enabledPlugins`. Every other key in `.claude/settings.local.json` must survive a profile application byte-for-byte in value.
+- The script never disables `plugin-configure@ooj-tools` (self-preservation).
 - Bundled skills are never written to `skillOverrides` (only names discovered by directory scan).
 - Marker file is `.claude/plugin-configure.json` relative to the target root; it must be added to `.git/info/exclude` (never to a committed `.gitignore`).
 - Run all commands from the worktree root: `/Users/ooj/Fun/code/ooj-tools/.claude/worktrees/plugin-configure`.
@@ -43,7 +43,7 @@ Create `plugins/plugin-configure/.claude-plugin/plugin.json`:
 {
   "name": "plugin-configure",
   "version": "0.1.0",
-  "description": "Cold-start skill/plugin curation: on first launch in an unconfigured repo, stamps a chosen profile (skillOverrides + plugin enables/disables) into .claude/settings.local.json, so new repos don't start with everything on.",
+  "description": "Cold-start skill/plugin curation: on first launch in an unconfigured repo, writes a chosen profile (skillOverrides + plugin enables/disables) into .claude/settings.local.json, so new repos don't start with everything on.",
   "author": {
     "name": "Elijah Wilt",
     "email": "elijahwilt.github@gmail.com"
@@ -65,7 +65,7 @@ In `.claude-plugin/marketplace.json`, append to the `plugins` array (after the `
     {
       "name": "plugin-configure",
       "source": "./plugins/plugin-configure",
-      "description": "Cold-start profile stamp: offers a curated skill/plugin profile on first launch in an unconfigured repo and writes it to .claude/settings.local.json; native /skills and /plugin menus handle everything after."
+      "description": "Cold-start profile setup: offers a curated skill/plugin profile on first launch in an unconfigured repo and writes it to .claude/settings.local.json; native /skills and /plugin menus handle everything after."
     }
 ```
 
@@ -74,7 +74,7 @@ In `.claude-plugin/marketplace.json`, append to the `plugins` array (after the `
 In `README.md`, add below the `dox` row of the Plugins table:
 
 ```markdown
-| [`plugin-configure`](plugins/plugin-configure/) | Cold-start profile stamp: offers a curated skill/plugin profile on first launch in an unconfigured repo and writes it to `.claude/settings.local.json`. |
+| [`plugin-configure`](plugins/plugin-configure/) | Cold-start profile setup: offers a curated skill/plugin profile on first launch in an unconfigured repo and writes it to `.claude/settings.local.json`. |
 ```
 
 - [ ] **Step 4: Validate**
@@ -91,11 +91,11 @@ git commit -m "scaffold plugin-configure plugin and marketplace entry"
 
 ---
 
-### Task 2: stamp.py pure computation core (TDD)
+### Task 2: apply_profile.py pure computation core (TDD)
 
 **Files:**
-- Create: `plugins/plugin-configure/scripts/stamp.py`
-- Test: `plugins/plugin-configure/tests/test_stamp.py`
+- Create: `plugins/plugin-configure/scripts/apply_profile.py`
+- Test: `plugins/plugin-configure/tests/test_apply_profile.py`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -104,83 +104,83 @@ git commit -m "scaffold plugin-configure plugin and marketplace entry"
   - `effective_plugin_state(records) -> dict` — `records` is the parsed list from `claude plugin list --json` (dicts with `id`, `enabled`, `scope`); returns `{plugin_id: bool}` using local > project > user precedence.
   - `compute_skill_overrides(discovered, allowed) -> dict` — `discovered` is a set of skill names, `allowed` a list; returns `{name: "off"}` for every discovered name not allowed, keys sorted.
   - `compute_plugin_arrays(state, allowed) -> (list, list)` — returns `(disabled, enabled)`: enabled-but-unlisted ids to disable (never `SELF_PLUGIN_ID`), and listed-but-currently-disabled installed ids to enable. Both sorted.
-  - `merge_settings(existing, overrides, disabled, enabled, plugins_known) -> dict` — non-destructive merge owning only the three stamp keys; when `plugins_known` is False the two plugin arrays are left exactly as in `existing`.
+  - `merge_settings(existing, overrides, disabled, enabled, plugins_known) -> dict` — non-destructive merge owning only the three owned settings keys; when `plugins_known` is False the two plugin arrays are left exactly as in `existing`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `plugins/plugin-configure/tests/test_stamp.py`:
+Create `plugins/plugin-configure/tests/test_apply_profile.py`:
 
 ```python
 #!/usr/bin/env python3
-"""Tests for scripts/stamp.py. Run: python3 plugins/plugin-configure/tests/test_stamp.py -v"""
+"""Tests for scripts/apply_profile.py. Run: python3 plugins/plugin-configure/tests/test_apply_profile.py -v"""
 
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import stamp
+import apply_profile
 
 
 class EffectivePluginStateTests(unittest.TestCase):
     def test_single_user_record(self):
         records = [{"id": "a@m", "enabled": True, "scope": "user"}]
-        self.assertEqual(stamp.effective_plugin_state(records), {"a@m": True})
+        self.assertEqual(apply_profile.effective_plugin_state(records), {"a@m": True})
 
     def test_local_beats_user(self):
         records = [
             {"id": "a@m", "enabled": True, "scope": "user"},
             {"id": "a@m", "enabled": False, "scope": "local"},
         ]
-        self.assertEqual(stamp.effective_plugin_state(records), {"a@m": False})
+        self.assertEqual(apply_profile.effective_plugin_state(records), {"a@m": False})
 
     def test_project_beats_user_regardless_of_order(self):
         records = [
             {"id": "a@m", "enabled": True, "scope": "project"},
             {"id": "a@m", "enabled": False, "scope": "user"},
         ]
-        self.assertEqual(stamp.effective_plugin_state(records), {"a@m": True})
+        self.assertEqual(apply_profile.effective_plugin_state(records), {"a@m": True})
 
     def test_record_without_id_is_ignored(self):
         records = [{"enabled": True, "scope": "user"}]
-        self.assertEqual(stamp.effective_plugin_state(records), {})
+        self.assertEqual(apply_profile.effective_plugin_state(records), {})
 
 
 class ComputeSkillOverridesTests(unittest.TestCase):
     def test_non_allowed_skills_turn_off_sorted(self):
-        result = stamp.compute_skill_overrides({"zeta", "alpha", "tdd"}, ["tdd"])
+        result = apply_profile.compute_skill_overrides({"zeta", "alpha", "tdd"}, ["tdd"])
         self.assertEqual(result, {"alpha": "off", "zeta": "off"})
         self.assertEqual(list(result), ["alpha", "zeta"])
 
     def test_empty_allowlist_turns_everything_off(self):
-        result = stamp.compute_skill_overrides({"a", "b"}, [])
+        result = apply_profile.compute_skill_overrides({"a", "b"}, [])
         self.assertEqual(result, {"a": "off", "b": "off"})
 
     def test_allowed_name_not_discovered_is_ignored(self):
-        result = stamp.compute_skill_overrides({"a"}, ["ghost"])
+        result = apply_profile.compute_skill_overrides({"a"}, ["ghost"])
         self.assertEqual(result, {"a": "off"})
 
 
 class ComputePluginArraysTests(unittest.TestCase):
     def test_enabled_unlisted_gets_disabled(self):
         state = {"a@m": True, "b@m": True}
-        disabled, enabled = stamp.compute_plugin_arrays(state, ["a@m"])
+        disabled, enabled = apply_profile.compute_plugin_arrays(state, ["a@m"])
         self.assertEqual(disabled, ["b@m"])
         self.assertEqual(enabled, [])
 
     def test_self_is_never_disabled(self):
-        state = {stamp.SELF_PLUGIN_ID: True, "b@m": True}
-        disabled, _ = stamp.compute_plugin_arrays(state, [])
+        state = {apply_profile.SELF_PLUGIN_ID: True, "b@m": True}
+        disabled, _ = apply_profile.compute_plugin_arrays(state, [])
         self.assertEqual(disabled, ["b@m"])
 
     def test_listed_but_disabled_gets_enabled(self):
         state = {"a@m": False}
-        disabled, enabled = stamp.compute_plugin_arrays(state, ["a@m"])
+        disabled, enabled = apply_profile.compute_plugin_arrays(state, ["a@m"])
         self.assertEqual(disabled, [])
         self.assertEqual(enabled, ["a@m"])
 
     def test_listed_but_not_installed_is_ignored(self):
-        disabled, enabled = stamp.compute_plugin_arrays({}, ["ghost@m"])
+        disabled, enabled = apply_profile.compute_plugin_arrays({}, ["ghost@m"])
         self.assertEqual(disabled, [])
         self.assertEqual(enabled, [])
 
@@ -188,30 +188,30 @@ class ComputePluginArraysTests(unittest.TestCase):
 class MergeSettingsTests(unittest.TestCase):
     def test_foreign_keys_survive(self):
         existing = {"permissions": {"allow": ["Bash(ls *)"]}}
-        merged = stamp.merge_settings(existing, {"a": "off"}, ["p@m"], [], True)
+        merged = apply_profile.merge_settings(existing, {"a": "off"}, ["p@m"], [], True)
         self.assertEqual(merged["permissions"], {"allow": ["Bash(ls *)"]})
         self.assertEqual(merged["skillOverrides"], {"a": "off"})
         self.assertEqual(merged["disabledPlugins"], ["p@m"])
 
     def test_old_overrides_replaced_wholesale(self):
         existing = {"skillOverrides": {"stale": "off"}}
-        merged = stamp.merge_settings(existing, {"fresh": "off"}, [], [], True)
+        merged = apply_profile.merge_settings(existing, {"fresh": "off"}, [], [], True)
         self.assertEqual(merged["skillOverrides"], {"fresh": "off"})
 
     def test_empty_arrays_remove_stale_keys(self):
         existing = {"disabledPlugins": ["old@m"], "enabledPlugins": ["old2@m"]}
-        merged = stamp.merge_settings(existing, {}, [], [], True)
+        merged = apply_profile.merge_settings(existing, {}, [], [], True)
         self.assertNotIn("disabledPlugins", merged)
         self.assertNotIn("enabledPlugins", merged)
 
     def test_plugins_unknown_leaves_arrays_untouched(self):
         existing = {"disabledPlugins": ["keep@m"]}
-        merged = stamp.merge_settings(existing, {}, [], [], False)
+        merged = apply_profile.merge_settings(existing, {}, [], [], False)
         self.assertEqual(merged["disabledPlugins"], ["keep@m"])
 
     def test_existing_dict_not_mutated(self):
         existing = {"skillOverrides": {"stale": "off"}}
-        stamp.merge_settings(existing, {"fresh": "off"}, [], [], True)
+        apply_profile.merge_settings(existing, {"fresh": "off"}, [], [], True)
         self.assertEqual(existing["skillOverrides"], {"stale": "off"})
 
 
@@ -221,25 +221,25 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python3 plugins/plugin-configure/tests/test_stamp.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'stamp'`.
+Run: `python3 plugins/plugin-configure/tests/test_apply_profile.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'apply_profile'`.
 
 - [ ] **Step 3: Implement the computation core**
 
-Create `plugins/plugin-configure/scripts/stamp.py`:
+Create `plugins/plugin-configure/scripts/apply_profile.py`:
 
 ```python
 #!/usr/bin/env python3
-"""Stamp a curated skill/plugin profile into a repo's local Claude Code settings.
+"""Apply a curated skill/plugin profile to a repo's local Claude Code settings.
 
 Usage:
-    stamp.py <profile>          Stamp the named profile into the current repo/dir.
-    stamp.py --skip             Record a skip marker only (silences the nudge).
-    stamp.py --bootstrap-only   Ensure profiles.json exists, list profiles, exit.
+    apply_profile.py <profile>          Apply the named profile to the current repo/dir.
+    apply_profile.py --skip             Record a skip marker only (silences the nudge).
+    apply_profile.py --bootstrap-only   Ensure profiles.json exists, list profiles, exit.
 
 Profiles are allowlists (skills/plugins to keep ON) read from
 ~/.claude/plugin-configure/profiles.json, bootstrapped with starter profiles on
-first run. Stamping writes .claude/settings.local.json (owning only the
+first run. Applying a profile writes .claude/settings.local.json (owning only the
 skillOverrides / disabledPlugins / enabledPlugins keys), a marker at
 .claude/plugin-configure.json, and a .git/info/exclude entry for the marker.
 """
@@ -308,10 +308,10 @@ def compute_plugin_arrays(state, allowed):
 
 
 def merge_settings(existing, overrides, disabled, enabled, plugins_known):
-    """Merge stamp-owned keys into a settings dict, preserving everything else.
+    """Merge profile-owned keys into a settings dict, preserving everything else.
 
-    The stamp owns exactly skillOverrides, disabledPlugins and enabledPlugins.
-    Empty arrays remove their key (stale state from a previous stamp). When
+    The script owns exactly skillOverrides, disabledPlugins and enabledPlugins.
+    Empty arrays remove their key (stale state from a previous run). When
     plugins_known is False the two plugin arrays are left exactly as they were,
     because the plugin inventory could not be read.
 
@@ -339,14 +339,14 @@ def merge_settings(existing, overrides, disabled, enabled, plugins_known):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python3 plugins/plugin-configure/tests/test_stamp.py -v`
+Run: `python3 plugins/plugin-configure/tests/test_apply_profile.py -v`
 Expected: all tests PASS (OK).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-configure/scripts/stamp.py plugins/plugin-configure/tests/test_stamp.py
-git commit -m "add stamp.py computation core with tests"
+git add plugins/plugin-configure/scripts/apply_profile.py plugins/plugin-configure/tests/test_apply_profile.py
+git commit -m "add apply_profile.py computation core with tests"
 ```
 
 ---
@@ -354,8 +354,8 @@ git commit -m "add stamp.py computation core with tests"
 ### Task 3: Starter profiles + bootstrap (TDD)
 
 **Files:**
-- Modify: `plugins/plugin-configure/scripts/stamp.py`
-- Test: `plugins/plugin-configure/tests/test_stamp.py`
+- Modify: `plugins/plugin-configure/scripts/apply_profile.py`
+- Test: `plugins/plugin-configure/tests/test_apply_profile.py`
 
 **Interfaces:**
 - Consumes: `atomic-write` helper is introduced here and reused by Task 4.
@@ -367,25 +367,25 @@ git commit -m "add stamp.py computation core with tests"
 
 - [ ] **Step 1: Add the failing tests**
 
-Append to `plugins/plugin-configure/tests/test_stamp.py` (before the `if __name__` block; also add `import json`, `import tempfile` and `import os` to the imports at the top):
+Append to `plugins/plugin-configure/tests/test_apply_profile.py` (before the `if __name__` block; also add `import json`, `import tempfile` and `import os` to the imports at the top):
 
 ```python
 class StarterProfilesTests(unittest.TestCase):
     def test_four_profiles_exist(self):
         self.assertEqual(
-            sorted(stamp.STARTER_PROFILES["profiles"]),
+            sorted(apply_profile.STARTER_PROFILES["profiles"]),
             ["data-ml", "general-dev", "minimal", "web-dev"],
         )
 
     def test_general_dev_keep_set(self):
-        profile = stamp.STARTER_PROFILES["profiles"]["general-dev"]
+        profile = apply_profile.STARTER_PROFILES["profiles"]["general-dev"]
         self.assertEqual(len(profile["skills"]), 15)
         self.assertIn("tdd", profile["skills"])
         self.assertEqual(len(profile["plugins"]), 12)
         self.assertIn("superpowers@claude-plugins-official", profile["plugins"])
 
     def test_minimal_is_near_silent(self):
-        profile = stamp.STARTER_PROFILES["profiles"]["minimal"]
+        profile = apply_profile.STARTER_PROFILES["profiles"]["minimal"]
         self.assertEqual(profile["skills"], [])
         self.assertEqual(
             profile["plugins"],
@@ -393,12 +393,12 @@ class StarterProfilesTests(unittest.TestCase):
         )
 
     def test_web_dev_is_general_superset(self):
-        profiles = stamp.STARTER_PROFILES["profiles"]
+        profiles = apply_profile.STARTER_PROFILES["profiles"]
         self.assertTrue(set(profiles["general-dev"]["skills"]) < set(profiles["web-dev"]["skills"]))
         self.assertIn("vercel@claude-plugins-official", profiles["web-dev"]["plugins"])
 
     def test_data_ml_adds_huggingface(self):
-        profiles = stamp.STARTER_PROFILES["profiles"]
+        profiles = apply_profile.STARTER_PROFILES["profiles"]
         self.assertIn("huggingface-skills@claude-plugins-official", profiles["data-ml"]["plugins"])
         self.assertIn("video-frames", profiles["data-ml"]["skills"])
 
@@ -407,18 +407,18 @@ class EnsureProfilesTests(unittest.TestCase):
     def test_bootstraps_when_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "nested" / "profiles.json"
-            doc, created = stamp.ensure_profiles(path)
+            doc, created = apply_profile.ensure_profiles(path)
             self.assertTrue(created)
             self.assertTrue(path.exists())
-            self.assertEqual(doc, stamp.STARTER_PROFILES)
-            self.assertEqual(json.loads(path.read_text()), stamp.STARTER_PROFILES)
+            self.assertEqual(doc, apply_profile.STARTER_PROFILES)
+            self.assertEqual(json.loads(path.read_text()), apply_profile.STARTER_PROFILES)
 
     def test_existing_file_wins_and_not_overwritten(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "profiles.json"
             custom = {"version": 1, "profiles": {"mine": {"description": "x", "skills": [], "plugins": []}}}
             path.write_text(json.dumps(custom))
-            doc, created = stamp.ensure_profiles(path)
+            doc, created = apply_profile.ensure_profiles(path)
             self.assertFalse(created)
             self.assertEqual(doc, custom)
 
@@ -427,7 +427,7 @@ class AtomicWriteJsonTests(unittest.TestCase):
     def test_writes_json_with_trailing_newline(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "out.json"
-            stamp.atomic_write_json(path, {"a": 1})
+            apply_profile.atomic_write_json(path, {"a": 1})
             text = path.read_text()
             self.assertTrue(text.endswith("\n"))
             self.assertEqual(json.loads(text), {"a": 1})
@@ -436,18 +436,18 @@ class AtomicWriteJsonTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "out.json"
             path.write_text("{\"old\": true}")
-            stamp.atomic_write_json(path, {"new": True})
+            apply_profile.atomic_write_json(path, {"new": True})
             self.assertEqual(json.loads(path.read_text()), {"new": True})
 ```
 
 - [ ] **Step 2: Run tests to verify the new ones fail**
 
-Run: `python3 plugins/plugin-configure/tests/test_stamp.py -v`
+Run: `python3 plugins/plugin-configure/tests/test_apply_profile.py -v`
 Expected: new tests FAIL with `AttributeError` (`STARTER_PROFILES` etc. undefined); Task 2 tests still PASS.
 
 - [ ] **Step 3: Implement profiles + bootstrap**
 
-In `plugins/plugin-configure/scripts/stamp.py`, extend the imports and add below the `_SCOPE_RANK` constant:
+In `plugins/plugin-configure/scripts/apply_profile.py`, extend the imports and add below the `_SCOPE_RANK` constant:
 
 ```python
 import os
@@ -561,23 +561,23 @@ def ensure_profiles(path):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python3 plugins/plugin-configure/tests/test_stamp.py -v`
+Run: `python3 plugins/plugin-configure/tests/test_apply_profile.py -v`
 Expected: all tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-configure/scripts/stamp.py plugins/plugin-configure/tests/test_stamp.py
+git add plugins/plugin-configure/scripts/apply_profile.py plugins/plugin-configure/tests/test_apply_profile.py
 git commit -m "add starter profiles and profiles.json bootstrap"
 ```
 
 ---
 
-### Task 4: stamp.py IO + CLI (TDD, includes subprocess end-to-end test)
+### Task 4: apply_profile.py IO + CLI (TDD, includes subprocess end-to-end test)
 
 **Files:**
-- Modify: `plugins/plugin-configure/scripts/stamp.py`
-- Test: `plugins/plugin-configure/tests/test_stamp.py`
+- Modify: `plugins/plugin-configure/scripts/apply_profile.py`
+- Test: `plugins/plugin-configure/tests/test_apply_profile.py`
 
 **Interfaces:**
 - Consumes: everything from Tasks 2–3.
@@ -588,11 +588,11 @@ git commit -m "add starter profiles and profiles.json bootstrap"
   - `discover_skills(skill_dirs) -> set` — dirs/symlinked-dirs only, dotfiles ignored.
   - `load_plugin_records() -> list | None` — None (with stderr warning) when `claude` is missing/fails/returns non-list.
   - `write_marker(root, marker) -> Path`, `ensure_git_exclude(root) -> None`, `utc_now_iso() -> str`
-  - `main(argv=None) -> int` — the CLI contract Tasks 5–6 rely on: `stamp.py <profile> | --skip | --bootstrap-only`; exit 0 on success, 2 on user error.
+  - `main(argv=None) -> int` — the CLI contract Tasks 5–6 rely on: `apply_profile.py <profile> | --skip | --bootstrap-only`; exit 0 on success, 2 on user error.
 
 - [ ] **Step 1: Add the failing tests**
 
-Append to `plugins/plugin-configure/tests/test_stamp.py` (add `import subprocess` to the top imports; `STAMP = Path(__file__).resolve().parents[1] / "scripts" / "stamp.py"` as a module-level constant below the `sys.path` bootstrap):
+Append to `plugins/plugin-configure/tests/test_apply_profile.py` (add `import subprocess` to the top imports; `APPLY = Path(__file__).resolve().parents[1] / "scripts" / "apply_profile.py"` as a module-level constant below the `sys.path` bootstrap):
 
 ```python
 class DiscoverSkillsTests(unittest.TestCase):
@@ -604,7 +604,7 @@ class DiscoverSkillsTests(unittest.TestCase):
             (root / "skills" / "linked-skill").symlink_to(root / "elsewhere" / "linked-skill")
             (root / "skills" / ".hidden").mkdir()
             (root / "skills" / "stray-file.md").write_text("not a skill")
-            names = stamp.discover_skills([root / "skills", root / "missing"])
+            names = apply_profile.discover_skills([root / "skills", root / "missing"])
             self.assertEqual(names, {"real-skill", "linked-skill"})
 
 
@@ -620,23 +620,23 @@ class GitHelpersTests(unittest.TestCase):
             repo = self._make_repo(tmp)
             sub = repo / "a" / "b"
             sub.mkdir(parents=True)
-            self.assertEqual(stamp.find_repo_root(sub).resolve(), repo.resolve())
+            self.assertEqual(apply_profile.find_repo_root(sub).resolve(), repo.resolve())
             outside = Path(tmp) / "plain"
             outside.mkdir()
-            self.assertIsNone(stamp.find_repo_root(outside))
+            self.assertIsNone(apply_profile.find_repo_root(outside))
 
     def test_ensure_git_exclude_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = self._make_repo(tmp)
-            stamp.ensure_git_exclude(repo)
-            stamp.ensure_git_exclude(repo)
+            apply_profile.ensure_git_exclude(repo)
+            apply_profile.ensure_git_exclude(repo)
             exclude = repo / ".git" / "info" / "exclude"
             lines = exclude.read_text().splitlines()
-            self.assertEqual(lines.count(stamp.MARKER_RELPATH), 1)
+            self.assertEqual(lines.count(apply_profile.MARKER_RELPATH), 1)
 
     def test_ensure_git_exclude_noop_outside_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
-            stamp.ensure_git_exclude(Path(tmp))  # must not raise
+            apply_profile.ensure_git_exclude(Path(tmp))  # must not raise
             self.assertFalse((Path(tmp) / ".git").exists())
 
 
@@ -644,12 +644,12 @@ FAKE_PLUGIN_RECORDS = [
     {"id": "keep@m", "enabled": True, "scope": "user"},
     {"id": "drop@m", "enabled": True, "scope": "user"},
     {"id": "wake@m", "enabled": False, "scope": "user"},
-    {"id": stamp.SELF_PLUGIN_ID, "enabled": True, "scope": "user"},
+    {"id": apply_profile.SELF_PLUGIN_ID, "enabled": True, "scope": "user"},
 ]
 
 
 class CliEndToEndTests(unittest.TestCase):
-    """Run stamp.py as a subprocess against a fake HOME, repo and claude CLI."""
+    """Run apply_profile.py as a subprocess against a fake HOME, repo and claude CLI."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -684,17 +684,17 @@ class CliEndToEndTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def run_stamp(self, *args):
+    def run_apply(self, *args):
         return subprocess.run(
-            [sys.executable, str(STAMP), *args],
+            [sys.executable, str(APPLY), *args],
             cwd=str(self.repo), env=self.env, capture_output=True, text=True,
         )
 
-    def test_stamp_profile_writes_everything(self):
+    def test_apply_profile_writes_everything(self):
         (self.repo / ".claude").mkdir()
         (self.repo / ".claude" / "settings.local.json").write_text(
             json.dumps({"permissions": {"allow": ["Bash(ls *)"]}}))
-        result = self.run_stamp("test-profile")
+        result = self.run_apply("test-profile")
         self.assertEqual(result.returncode, 0, result.stderr)
         settings = json.loads((self.repo / ".claude" / "settings.local.json").read_text())
         self.assertEqual(settings["permissions"], {"allow": ["Bash(ls *)"]})
@@ -704,25 +704,25 @@ class CliEndToEndTests(unittest.TestCase):
         self.assertEqual(settings["enabledPlugins"], ["wake@m"])
         marker = json.loads((self.repo / ".claude" / "plugin-configure.json").read_text())
         self.assertEqual(marker["profile"], "test-profile")
-        self.assertIn("stampedAt", marker)
-        self.assertEqual(marker["pluginVersion"], stamp.PLUGIN_VERSION)
+        self.assertIn("appliedAt", marker)
+        self.assertEqual(marker["pluginVersion"], apply_profile.PLUGIN_VERSION)
         exclude = (self.repo / ".git" / "info" / "exclude").read_text()
-        self.assertIn(stamp.MARKER_RELPATH, exclude)
+        self.assertIn(apply_profile.MARKER_RELPATH, exclude)
 
     def test_skip_writes_only_marker(self):
-        result = self.run_stamp("--skip")
+        result = self.run_apply("--skip")
         self.assertEqual(result.returncode, 0, result.stderr)
         marker = json.loads((self.repo / ".claude" / "plugin-configure.json").read_text())
         self.assertTrue(marker["skipped"])
         self.assertFalse((self.repo / ".claude" / "settings.local.json").exists())
 
     def test_unknown_profile_errors(self):
-        result = self.run_stamp("nope")
+        result = self.run_apply("nope")
         self.assertEqual(result.returncode, 2)
         self.assertIn("test-profile", result.stderr)
 
     def test_bootstrap_only_lists_profiles(self):
-        result = self.run_stamp("--bootstrap-only")
+        result = self.run_apply("--bootstrap-only")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("test-profile", result.stdout)
         self.assertFalse((self.repo / ".claude").exists())
@@ -731,19 +731,19 @@ class CliEndToEndTests(unittest.TestCase):
         (self.repo / ".claude").mkdir()
         broken = self.repo / ".claude" / "settings.local.json"
         broken.write_text("{not json")
-        result = self.run_stamp("test-profile")
+        result = self.run_apply("test-profile")
         self.assertEqual(result.returncode, 2)
         self.assertEqual(broken.read_text(), "{not json")
 ```
 
 - [ ] **Step 2: Run tests to verify the new ones fail**
 
-Run: `python3 plugins/plugin-configure/tests/test_stamp.py -v`
+Run: `python3 plugins/plugin-configure/tests/test_apply_profile.py -v`
 Expected: new tests FAIL (`AttributeError: ... 'discover_skills'` etc.); earlier tests PASS.
 
 - [ ] **Step 3: Implement IO + CLI**
 
-In `plugins/plugin-configure/scripts/stamp.py`, complete the import block:
+In `plugins/plugin-configure/scripts/apply_profile.py`, complete the import block:
 
 ```python
 import argparse
@@ -890,7 +890,7 @@ def main(argv=None):
     """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("profile", nargs="?", help="profile name to stamp")
+    parser.add_argument("profile", nargs="?", help="profile name to apply")
     parser.add_argument("--skip", action="store_true",
                         help="record a skip marker and exit")
     parser.add_argument("--bootstrap-only", action="store_true",
@@ -910,7 +910,7 @@ def main(argv=None):
     root = find_repo_root(Path.cwd()) or Path.cwd()
 
     if args.skip:
-        marker = write_marker(root, {"skipped": True, "stampedAt": utc_now_iso()})
+        marker = write_marker(root, {"skipped": True, "appliedAt": utc_now_iso()})
         ensure_git_exclude(root)
         print(f"skip recorded at {marker}; the session nudge is silenced here")
         return 0
@@ -944,11 +944,11 @@ def main(argv=None):
 
     atomic_write_json(settings_path, merge_settings(
         existing, overrides, disabled, enabled, records is not None))
-    write_marker(root, {"profile": args.profile, "stampedAt": utc_now_iso(),
+    write_marker(root, {"profile": args.profile, "appliedAt": utc_now_iso(),
                         "pluginVersion": PLUGIN_VERSION})
     ensure_git_exclude(root)
 
-    print(f"stamped profile {args.profile!r} into {settings_path}")
+    print(f"applied profile {args.profile!r} to {settings_path}")
     print(f"  skills off: {len(overrides)}  plugins disabled: {len(disabled)}"
           f"  plugins enabled: {len(enabled)}")
     print("  takes effect from the next Claude Code session in this directory")
@@ -961,14 +961,14 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python3 plugins/plugin-configure/tests/test_stamp.py -v`
+Run: `python3 plugins/plugin-configure/tests/test_apply_profile.py -v`
 Expected: all tests PASS (including the five CLI end-to-end tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/plugin-configure/scripts/stamp.py plugins/plugin-configure/tests/test_stamp.py
-git commit -m "add stamp.py discovery, settings writing and CLI"
+git add plugins/plugin-configure/scripts/apply_profile.py plugins/plugin-configure/tests/test_apply_profile.py
+git commit -m "add apply_profile.py discovery, settings writing and CLI"
 ```
 
 ---
@@ -1051,7 +1051,7 @@ Create `plugins/plugin-configure/hooks/session-start.sh`:
 
 ```bash
 #!/bin/bash
-# SessionStart nudge: offer a profile stamp in unconfigured git repos.
+# SessionStart nudge: offer a profile pick in unconfigured git repos.
 # Every non-nudge path exits 0 silently -- this hook must never block a session.
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
@@ -1063,7 +1063,7 @@ if [ -f "$settings" ] && grep -q '"skillOverrides"' "$settings"; then
 fi
 
 cat <<JSON
-{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "plugin-configure: this repo has no skill/plugin profile stamped. After handling the user's immediate request (or right away if there is none), invoke the plugin-configure:configure command via the Skill tool to offer a one-card profile pick. If the user declines, silence this nudge permanently for this repo by running: python3 \\"${CLAUDE_PLUGIN_ROOT}/scripts/stamp.py\\" --skip"}}
+{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "plugin-configure: this repo has no skill/plugin profile applied. After handling the user's immediate request (or right away if there is none), invoke the plugin-configure:configure command via the Skill tool to offer a one-card profile pick. If the user declines, silence this nudge permanently for this repo by running: python3 \\"${CLAUDE_PLUGIN_ROOT}/scripts/apply_profile.py\\" --skip"}}
 JSON
 exit 0
 ```
@@ -1116,7 +1116,7 @@ git commit -m "add SessionStart nudge hook with shell tests"
 - Create: `plugins/plugin-configure/README.md`
 
 **Interfaces:**
-- Consumes: the `stamp.py` CLI contract from Task 4 (`--bootstrap-only`, `<profile>`, `--skip`) and the hook nudge text from Task 5 (which names `plugin-configure:configure`).
+- Consumes: the `apply_profile.py` CLI contract from Task 4 (`--bootstrap-only`, `<profile>`, `--skip`) and the hook nudge text from Task 5 (which names `plugin-configure:configure`).
 - Produces: the `/plugin-configure:configure` slash command — the single interactive flow used both by the nudge and manually.
 
 - [ ] **Step 1: Write the command**
@@ -1125,18 +1125,18 @@ Create `plugins/plugin-configure/commands/configure.md`:
 
 ```markdown
 ---
-description: Stamp a skill/plugin profile into this repo's .claude/settings.local.json (or re-stamp / skip)
+description: Apply a skill/plugin profile to this repo's .claude/settings.local.json (or re-apply / skip)
 ---
 
-Stamp a curated skill/plugin profile into the current repo's local settings.
+Apply a curated skill/plugin profile to the current repo's local settings.
 Follow these steps exactly:
 
-1. Run: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/stamp.py" --bootstrap-only`
+1. Run: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/apply_profile.py" --bootstrap-only`
    It prints one `name: description` line per available profile (bootstrapping
    `~/.claude/plugin-configure/profiles.json` with starter profiles on first
    run).
 
-2. Present ONE AskUserQuestion card asking which profile to stamp: one option
+2. Present ONE AskUserQuestion card asking which profile to apply: one option
    per profile (label = profile name, description = its description line), max
    4 options. If there are more than 4 profiles, prefer `general-dev`,
    `minimal`, `web-dev`, `data-ml` and mention the rest in the question text
@@ -1145,16 +1145,16 @@ Follow these steps exactly:
 
 3. Act on the answer:
    - A profile name (picked or typed): run
-     `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/stamp.py" <profile>`
+     `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/apply_profile.py" <profile>`
    - "Other" with skip-like text, a dismissal, or an explicit decline: run
-     `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/stamp.py" --skip`
+     `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/apply_profile.py" --skip`
 
 4. Relay the script's summary (skills turned off, plugins disabled/enabled,
    file paths) and remind the user the new settings take effect from the next
    Claude Code session in this directory — the current session keeps its
    already-loaded skills. Profiles can be edited any time at
    `~/.claude/plugin-configure/profiles.json`; re-running this command
-   re-stamps over the previous choice.
+   re-applies over the previous choice.
 ```
 
 - [ ] **Step 2: Write the plugin README**
@@ -1167,7 +1167,7 @@ Create `plugins/plugin-configure/README.md`:
 Cold-start skill/plugin curation for Claude Code. Every brand-new repo starts
 with all personal skills and user-scope plugins ON; native `/skills` and
 `/plugin` choices are repo-sticky but don't travel to fresh dirs. This plugin
-stamps a curated **profile** into a repo's `.claude/settings.local.json` on
+writes a curated **profile** into a repo's `.claude/settings.local.json` on
 first launch, then gets out of the way — granular follow-ups stay in the
 native `/skills` and `/plugin` menus.
 
@@ -1176,7 +1176,7 @@ native `/skills` and `/plugin` menus.
 - A SessionStart hook fires in every session. In an unconfigured git repo (no
   marker, no existing `skillOverrides`) it asks the model to offer a one-card
   profile pick; everywhere else it is silent.
-- Picking a profile runs `scripts/stamp.py`, which:
+- Picking a profile runs `scripts/apply_profile.py`, which:
   - scans `~/.claude/skills/` + `<repo>/.claude/skills/` and writes
     `skillOverrides: {<non-profile skill>: "off"}`;
   - reads `claude plugin list --json` and writes local `disabledPlugins`
@@ -1193,18 +1193,18 @@ native `/skills` and `/plugin` menus.
 
 Allowlists (what stays ON) live in `~/.claude/plugin-configure/profiles.json`,
 bootstrapped on first run with `general-dev`, `minimal`, `web-dev` and
-`data-ml`. Edit freely — the file is re-read on every stamp.
+`data-ml`. Edit freely — the file is re-read on every run.
 
 ## Usage
 
 - Automatic: open Claude Code in a fresh git repo and answer the card.
-- Manual / re-stamp / non-git dirs: `/plugin-configure:configure`
-- Headless skip: `python3 scripts/stamp.py --skip`
+- Manual / re-apply / non-git dirs: `/plugin-configure:configure`
+- Headless skip: `python3 scripts/apply_profile.py --skip`
 
 ## Tests
 
 ```
-python3 plugins/plugin-configure/tests/test_stamp.py -v
+python3 plugins/plugin-configure/tests/test_apply_profile.py -v
 bash plugins/plugin-configure/tests/test_hook.sh
 ```
 ```
@@ -1214,7 +1214,7 @@ bash plugins/plugin-configure/tests/test_hook.sh
 Run:
 ```bash
 claude plugin validate plugins/plugin-configure && claude plugin validate .
-python3 plugins/plugin-configure/tests/test_stamp.py -v
+python3 plugins/plugin-configure/tests/test_apply_profile.py -v
 bash plugins/plugin-configure/tests/test_hook.sh
 ```
 Expected: validate clean; all python tests PASS; hook tests ALL PASS.
@@ -1240,25 +1240,25 @@ git commit -m "add configure command and plugin README"
 - [ ] **Step 1: Verify the real bootstrap + real inventories (safe: touches only `~/.claude/plugin-configure/`)**
 
 ```bash
-python3 plugins/plugin-configure/scripts/stamp.py --bootstrap-only
+python3 plugins/plugin-configure/scripts/apply_profile.py --bootstrap-only
 ```
 Expected: prints `bootstrapped starter profiles at /Users/ooj/.claude/plugin-configure/profiles.json` (first run only) then the four `name: description` lines. Check the file exists and lists 4 profiles.
 
-- [ ] **Step 2: Stamp a scratch repo for real**
+- [ ] **Step 2: Apply a profile to a scratch repo for real**
 
 ```bash
 scratch=$(mktemp -d)
 git init -q "$scratch"
 cd "$scratch"
 bash /Users/ooj/Fun/code/ooj-tools/.claude/worktrees/plugin-configure/plugins/plugin-configure/hooks/session-start.sh
-python3 /Users/ooj/Fun/code/ooj-tools/.claude/worktrees/plugin-configure/plugins/plugin-configure/scripts/stamp.py general-dev
+python3 /Users/ooj/Fun/code/ooj-tools/.claude/worktrees/plugin-configure/plugins/plugin-configure/scripts/apply_profile.py general-dev
 bash /Users/ooj/Fun/code/ooj-tools/.claude/worktrees/plugin-configure/plugins/plugin-configure/hooks/session-start.sh
 cat .claude/settings.local.json | python3 -m json.tool | head -40
 cat .claude/plugin-configure.json
 cat .git/info/exclude
 cd /Users/ooj/Fun/code/ooj-tools/.claude/worktrees/plugin-configure
 ```
-Expected: first hook run prints the nudge JSON; stamp reports ~27 skills off and real plugin counts; second hook run prints nothing; settings/marker/exclude all as designed (with the REAL 42-skill inventory: `skillOverrides` has 42 − 15 = 27 entries for general-dev).
+Expected: first hook run prints the nudge JSON; the script reports ~27 skills off and real plugin counts; second hook run prints nothing; settings/marker/exclude all as designed (with the REAL 42-skill inventory: `skillOverrides` has 42 − 15 = 27 entries for general-dev).
 
 - [ ] **Step 3: Verify ooj-tools itself is grandfathered**
 

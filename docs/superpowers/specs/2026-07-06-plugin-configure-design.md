@@ -1,7 +1,7 @@
 # plugin-configure — design spec
 
 - **Date:** 2026-07-06
-- **Status:** awaiting user sign-off
+- **Status:** approved 2026-07-06
 - **Branch:** `feat/plugin-configure` (worktree `.claude/worktrees/plugin-configure/`)
 
 ## Problem
@@ -15,7 +15,7 @@ plugin disables). That cold-start reset is the entire problem.
 
 `plugin-configure` is a plugin in the ooj-tools marketplace. On the first session in an
 unconfigured git repo, its SessionStart hook nudges the model to offer a one-card
-profile pick (native `AskUserQuestion`). Picking a profile stamps repo-local settings —
+profile pick (native `AskUserQuestion`). Picking a profile writes repo-local settings —
 `skillOverrides` and plugin enable/disable arrays in `.claude/settings.local.json` —
 plus a marker file. All granular follow-up editing stays in the native `/skills` and
 `/plugin` menus; this plugin only solves the cold start.
@@ -24,12 +24,12 @@ plus a marker file. All granular follow-up editing stays in the native `/skills`
 
 | Topic | Decision |
 |---|---|
-| Scope | Profiles-first cold-start stamp; no custom granular TUI (ADR-001/002, prior session) |
+| Scope | Profiles-first cold-start setup; no custom granular TUI (ADR-001/002, prior session) |
 | Skill discovery | Scan `~/.claude/skills/` + project `.claude/skills/`. Bundled skills (embedded in the CLI binary, unscannable) always stay ON. |
 | Semantics | Profiles are **allowlists** — skills/plugins to keep ON; everything else discovered gets turned off. |
 | Profile storage | `~/.claude/plugin-configure/profiles.json`, bootstrapped on first run. |
 | Write target | `.claude/settings.local.json` (same file native `/skills` writes). |
-| Plugins | Stamp manages plugins per-repo via local-scope arrays. |
+| Plugins | The script manages plugins per-repo via local-scope arrays. |
 | Hook | Plugin-shipped SessionStart hook; git repos only; self-preservation of plugin-configure. |
 | Idempotency | Dedicated marker `.claude/plugin-configure.json`, added to `.git/info/exclude`. |
 | Starter profiles | `general-dev`, `minimal`, `web-dev`, `data-ml`. |
@@ -57,25 +57,25 @@ When all hold, it prints hook JSON:
 
 ```json
 {"hookSpecificOutput": {"hookEventName": "SessionStart",
-  "additionalContext": "This repo has no plugin-configure profile stamped. Offer the user a profile pick by following the /plugin-configure:configure command instructions at ${CLAUDE_PLUGIN_ROOT}/commands/configure.md."}}
+  "additionalContext": "This repo has no plugin-configure profile applied. Offer the user a profile pick by following the /plugin-configure:configure command instructions at ${CLAUDE_PLUGIN_ROOT}/commands/configure.md."}}
 ```
 
 ### 3. Command — `commands/configure.md` (`/plugin-configure:configure`)
 
-Single source of the stamping flow, used by both the hook nudge and manual invocation
-(manual works anywhere, including non-git dirs, and a re-run re-stamps over a previous
-stamp or skip). Flow:
+Single source of the profile-apply flow, used by both the hook nudge and manual
+invocation (manual works anywhere, including non-git dirs, and a re-run overwrites a
+previous choice or skip). Flow:
 
-1. Run `scripts/stamp.py --bootstrap-only` to ensure `profiles.json` exists.
+1. Run `scripts/apply_profile.py --bootstrap-only` to ensure `profiles.json` exists.
 2. Read profile names/descriptions from `profiles.json`.
 3. `AskUserQuestion`: profiles from the file as options, up to 4 per card
    ("Other"/dismissal ⇒ skip).
-4. Run `scripts/stamp.py <profile>` (or `--skip`).
+4. Run `scripts/apply_profile.py <profile>` (or `--skip`).
 5. Confirm what was written; note settings apply from the **next** session.
 
-### 4. Engine — `scripts/stamp.py` (python3, stdlib only, Google-style docstrings)
+### 4. Engine — `scripts/apply_profile.py` (python3, stdlib only, Google-style docstrings)
 
-`stamp.py <profile> | --skip | --bootstrap-only` — deterministic, idempotent.
+`apply_profile.py <profile> | --skip | --bootstrap-only` — deterministic, idempotent.
 
 - **Inventory:** skill names = directory entries (dirs/symlinks only, dotfiles
   ignored) of `~/.claude/skills/` plus `<repo-root>/.claude/skills/` if present.
@@ -89,18 +89,18 @@ stamp or skip). Flow:
     `profile.plugins` — always excluding `plugin-configure@ooj-tools` itself.
   - `enabledPlugins` = every id in `profile.plugins` that is installed but currently
     disabled (see "Local enables" below).
-- **Write:** deep-merge into `<repo-root>/.claude/settings.local.json` — the stamp owns
+- **Write:** deep-merge into `<repo-root>/.claude/settings.local.json` — the script owns
   and replaces exactly the keys `skillOverrides`, `disabledPlugins`, `enabledPlugins`;
   all other keys (permissions, hooks, …) are preserved. Atomic tmp+rename write.
 - **Marker:** write `.claude/plugin-configure.json`:
-  `{"profile": "web-dev", "stampedAt": "<ISO8601>", "pluginVersion": "0.1.0"}` or
-  `{"skipped": true, "stampedAt": "<ISO8601>"}`. If in a git repo, append
+  `{"profile": "web-dev", "appliedAt": "<ISO8601>", "pluginVersion": "0.1.0"}` or
+  `{"skipped": true, "appliedAt": "<ISO8601>"}`. If in a git repo, append
   `.claude/plugin-configure.json` to `.git/info/exclude` when not already present.
 - **`--skip`:** writes only the marker.
 - **Bootstrap:** if `~/.claude/plugin-configure/profiles.json` is missing, write the
   starter file (contents below) and report that it did so.
 - **Errors:** unknown profile → exit non-zero with the available names; `claude` CLI
-  missing/failing → stamp skills only and warn that plugins were left untouched;
+  missing/failing → write skill overrides only and warn that plugins were left untouched;
   never delete or truncate an existing settings file on failure.
 
 #### Local enables (flagged extension — confirm at review)
@@ -108,7 +108,7 @@ stamp or skip). Flow:
 The locked decision was disable-only. However, the approved web-dev profile includes
 the vercel plugin, which is currently **disabled at user scope** — the only way a
 profile can deliver it per-repo is a local-scope enable (local overrides user in
-settings precedence). The stamp therefore also writes `enabledPlugins` for profile
+settings precedence). The script therefore also writes `enabledPlugins` for profile
 plugins that are installed but disabled. Plugins deliberately absent from a profile are
 unaffected by this rule.
 
@@ -127,8 +127,8 @@ unaffected by this rule.
 }
 ```
 
-Skills absent from every list are exactly what gets stamped `off`; the file is meant to
-be hand-edited freely — the stamp re-reads it every run.
+Skills absent from every list are exactly what gets turned `off`; the file is meant to
+be hand-edited freely — the script re-reads it every run.
 
 ## Starter profile contents
 
@@ -162,7 +162,7 @@ hand-curated ooj-tools keep-set. `plugin-configure@ooj-tools` is implicitly alwa
 - skills: general-dev + video-frames
 - plugins: general-dev + huggingface-skills@claude-plugins-official
 
-### Left out of every starter profile (locally disabled after any stamp)
+### Left out of every starter profile (locally disabled after any profile is applied)
 
 - skills (18 beyond the profile-specific ones): backend-to-frontend-handoff-docs,
   browser-use, c4-architecture, curses, design-md, frontend-to-backend-requirements,
@@ -178,15 +178,15 @@ the design depends on their exact contents.
 ## Flows
 
 **Cold start:** new repo → hook fires (3 checks pass) → additionalContext → model runs
-the configure flow → card pick → `stamp.py general-dev` → settings.local.json +
-marker written → "stamped; takes effect next session." Next launch: marker exists →
+the configure flow → card pick → `apply_profile.py general-dev` → settings.local.json +
+marker written → "applied; takes effect next session." Next launch: marker exists →
 hook silent; `/skills` shows the offs.
 
-**Skip:** card dismissed or "Other: skip" → `stamp.py --skip` → marker only → never
+**Skip:** card dismissed or "Other: skip" → `apply_profile.py --skip` → marker only → never
 nagged again in that repo; everything stays on.
 
-**Re-stamp / switch profile:** user runs `/plugin-configure:configure` anywhere →
-same flow; stamp replaces the three owned keys and the marker.
+**Re-apply / switch profile:** user runs `/plugin-configure:configure` anywhere →
+same flow; the script replaces the three owned keys and the marker.
 
 **Hand-curated repo (e.g. ooj-tools):** `skillOverrides` already present → hook silent
 forever; nothing written.
@@ -195,13 +195,13 @@ forever; nothing written.
 
 - Bundled skills (always on; unscannable and never part of the pain).
 - Granular per-skill UI (native `/skills`), plugin browsing (`/plugin`).
-- Retro-syncing existing repos, profile "sync" after skill installs (re-stamp covers it).
+- Retro-syncing existing repos, profile "sync" after skill installs (re-apply covers it).
 - Multi-machine sync of profiles.json.
 
 ## Testing
 
 1. **Engine tests** (stdlib `unittest`, no dev dependencies):
-   fixture temp git repo → run stamp.py with a fixture profiles.json and a stubbed
+   fixture temp git repo → run apply_profile.py with a fixture profiles.json and a stubbed
    `claude plugin list --json` → assert: computed off-map matches inventory minus
    allowlist; existing settings keys preserved; atomic replace; marker contents;
    `.git/info/exclude` line added once; `--skip` touches only the marker;
@@ -210,5 +210,5 @@ forever; nothing written.
    (c) with marker, (d) with skillOverrides present — assert silence/JSON exactly.
 3. **E2E:** `claude --plugin-dir` (per dox testing instructions) in a scratch repo →
    nudge → pick → verify files; relaunch → no nudge, `/skills` reflects offs;
-   ooj-tools → no nudge; non-git dir → no nudge; `/plugin-configure:configure` re-stamp
+   ooj-tools → no nudge; non-git dir → no nudge; `/plugin-configure:configure` re-apply
    switches profiles.
