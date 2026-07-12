@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/transcripts.py --agent codex export",
+            "timeout": 30,
+            "statusMessage": "Saving session transcript"
+          }
+        ]
+      }
+    ]
+  }
+}

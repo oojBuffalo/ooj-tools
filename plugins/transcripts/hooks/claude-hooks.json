@@ -1,0 +1,38 @@
+{
+  "description": "Archive Claude Code sessions and capture permission activity.",
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/transcripts.py\" --agent claude --data-dir \"${CLAUDE_PLUGIN_DATA}\" capture-permission --event PermissionRequest",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/transcripts.py\" --agent claude --data-dir \"${CLAUDE_PLUGIN_DATA}\" capture-permission --event PermissionDenied",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/transcripts.py\" --agent claude --data-dir \"${CLAUDE_PLUGIN_DATA}\" export",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

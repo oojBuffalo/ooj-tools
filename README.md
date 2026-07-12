@@ -13,12 +13,14 @@ lists them.
 | Plugin | What it does |
 |--------|--------------|
 | [`dox`](plugins/dox/) | Deterministic AGENTS.md tree engine: injects the local AGENTS.md chain before edits (J1) and gates finishing on documentation drift (J3). |
+| [`transcripts`](plugins/transcripts/) | Worktree-safe Claude Code and Codex transcript archives with configurable verbosity. |
 
 ## Install
 
 ```
 /plugin marketplace add /Users/claw/projects/ooj-tools
 /plugin install dox@ooj-tools
+/plugin install transcripts@ooj-tools
 ```
 
 (Or point at the GitHub repo: `/plugin marketplace add oojBuffalo/ooj-tools`.)
@@ -28,6 +30,13 @@ plugin directory, not the marketplace root, so point it at `plugins/<name>`
 
 ```
 claude --plugin-dir /Users/claw/projects/ooj-tools/plugins/dox
+```
+
+For Codex, add this repository as a marketplace and install the same source:
+
+```bash
+codex plugin marketplace add /path/to/ooj-tools
+codex plugin add transcripts@ooj-tools
 ```
 
 ## Adding a plugin

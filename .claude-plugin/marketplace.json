@@ -10,6 +10,11 @@
       "name": "dox",
       "source": "./plugins/dox",
       "description": "Deterministic AGENTS.md tree engine: injects the local AGENTS.md chain before edits (J1) and gates finishing on documentation drift (J3)."
+    },
+    {
+      "name": "transcripts",
+      "source": "./plugins/transcripts",
+      "description": "Configurable, worktree-safe Markdown transcript archives for Claude Code and Codex."
     }
   ]
 }

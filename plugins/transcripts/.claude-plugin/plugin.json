@@ -1,0 +1,10 @@
+{
+  "name": "transcripts",
+  "version": "0.2.0",
+  "description": "Configurable, worktree-safe Markdown archives for Claude Code and Codex sessions.",
+  "author": {
+    "name": "Elijah Wilt"
+  },
+  "repository": "https://github.com/oojBuffalo/ooj-tools",
+  "hooks": "./hooks/claude-hooks.json"
+}
