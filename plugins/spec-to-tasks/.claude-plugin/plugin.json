@@ -1,0 +1,13 @@
+{
+  "name": "spec-to-tasks",
+  "version": "0.1.0",
+  "description": "Turn a PRD, spec, or MVP doc into a readable markdown task tree: parse into tasks, score complexity, and expand into subtasks — native skills, no MCP server or API keys.",
+  "author": {
+    "name": "Elijah Wilt",
+    "email": "elijahwilt.github@gmail.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/oojBuffalo/ooj-tools/tree/master/plugins/spec-to-tasks",
+  "repository": "https://github.com/oojBuffalo/ooj-tools",
+  "keywords": ["prd", "tasks", "planning", "breakdown", "subtasks", "complexity", "skills"]
+}

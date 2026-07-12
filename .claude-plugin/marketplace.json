@@ -15,6 +15,11 @@
       "name": "transcripts",
       "source": "./plugins/transcripts",
       "description": "Configurable, worktree-safe Markdown transcript archives for Claude Code and Codex."
+    },
+    {
+      "name": "spec-to-tasks",
+      "source": "./plugins/spec-to-tasks",
+      "description": "Turn a PRD, spec, or MVP doc into a readable markdown task tree: parse into tasks, score complexity, and expand into subtasks — native skills, no MCP server or API keys."
     }
   ]
 }
