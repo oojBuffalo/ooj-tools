@@ -5,6 +5,9 @@
   "author": {
     "name": "Elijah Wilt"
   },
+  "license": "MIT",
+  "homepage": "https://github.com/oojBuffalo/ooj-tools/tree/master/plugins/transcripts",
   "repository": "https://github.com/oojBuffalo/ooj-tools",
+  "keywords": ["transcripts", "sessions", "archive", "worktree", "hooks"],
   "hooks": "./hooks/claude-hooks.json"
 }

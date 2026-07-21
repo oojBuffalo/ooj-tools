@@ -1,5 +1,4 @@
 {
-  "description": "Archive Claude Code sessions and capture permission activity.",
   "hooks": {
     "PermissionRequest": [
       {
