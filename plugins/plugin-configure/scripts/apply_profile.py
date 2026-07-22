@@ -149,7 +149,9 @@ def ensure_profiles(path):
     if not path.exists():
         atomic_write_json(path, STARTER_PROFILES)
         created = True
-    return json.loads(path.read_text()), created
+    # utf-8-sig tolerates a BOM from hand-editing on Windows; plain UTF-8
+    # reads unchanged.
+    return json.loads(path.read_text(encoding="utf-8-sig")), created
 
 
 def find_repo_root(cwd):
@@ -338,7 +340,7 @@ def main(argv=None):
 
     settings_path = root / ".claude" / "settings.local.json"
     try:
-        existing = (json.loads(settings_path.read_text())
+        existing = (json.loads(settings_path.read_text(encoding="utf-8-sig"))
                     if settings_path.exists() else {})
     except json.JSONDecodeError as exc:
         print(f"error: {settings_path} is not valid JSON ({exc}); "
@@ -354,15 +356,9 @@ def main(argv=None):
     if records is None:
         plugin_note = "plugins: left untouched (inventory unavailable)"
     else:
-        # Count only real changes: entries that merely re-record a plugin's
-        # current effective state (local-only carries, preserved self /
-        # managed records) are not toggles.
-        current = effective_plugin_state(records)
-        changed = {pid: state for pid, state in enabled_plugins.items()
-                   if state != current.get(pid)}
-        on = sum(1 for state in changed.values() if state)
-        plugin_note = (f"plugins disabled: {len(changed) - on}"
-                       f"  plugins enabled: {on}")
+        off_count, on_count = summarize_plugin_changes(records, enabled_plugins)
+        plugin_note = (f"plugins disabled: {off_count}"
+                       f"  plugins enabled: {on_count}")
     print(f"applied profile {args.profile!r} to {settings_path}")
     print(f"  skills off: {len(overrides)}  {plugin_note}")
     print("  takes effect from the next Claude Code session in this directory")
@@ -478,6 +474,44 @@ def compute_enabled_plugins(records, allowed):
         elif desired != non_local[pid]:
             result[pid] = desired
     return result
+
+
+def summarize_plugin_changes(records, enabled_plugins):
+    """Count plugins whose effective enabled state will actually change.
+
+    Predicts each plugin's next-session state once the written map replaces
+    the local scope — managed records still win, entries in the new map act
+    at local scope, plugins without an entry fall back to their
+    project/user records — and compares it with the current effective
+    state. Carried records (self, managed) re-record existing state, and a
+    dropped stale delta can itself be a real toggle; both are handled by
+    modeling the outcome instead of counting map entries.
+
+    Args:
+        records: Parsed `claude plugin list --json` records.
+        enabled_plugins: The enabledPlugins map about to be written.
+
+    Returns:
+        Tuple (disabled, enabled) counts of genuine state changes.
+    """
+    current = effective_plugin_state(records)
+    managed_state = effective_plugin_state(
+        [rec for rec in records if rec.get("scope") == "managed"])
+    non_local = effective_plugin_state(
+        [rec for rec in records if rec.get("scope") != "local"])
+    disabled = enabled = 0
+    for pid, now in current.items():
+        if pid in managed_state:
+            future = managed_state[pid]
+        elif pid in enabled_plugins:
+            future = enabled_plugins[pid]
+        else:
+            future = non_local.get(pid, now)
+        if future and not now:
+            enabled += 1
+        elif now and not future:
+            disabled += 1
+    return disabled, enabled
 
 
 def merge_settings(existing, overrides, enabled_plugins, plugins_known):

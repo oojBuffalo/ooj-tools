@@ -169,6 +169,42 @@ class ComputeEnabledPluginsTests(unittest.TestCase):
         self.assertEqual(list(result), ["a@m", "m@m", "z@m"])
 
 
+class SummarizePluginChangesTests(unittest.TestCase):
+    def test_fresh_disable_and_enable_counted(self):
+        records = [_rec("a@m", True, "user"), _rec("b@m", False, "user")]
+        self.assertEqual(
+            apply_profile.summarize_plugin_changes(
+                records, {"a@m": False, "b@m": True}),
+            (1, 1))
+
+    def test_carried_managed_conflict_record_is_not_a_toggle(self):
+        # The carried local true can never take effect while the managed
+        # false exists; nothing changes either way.
+        records = [_rec("foo@m", True, "local"), _rec("foo@m", False, "managed")]
+        self.assertEqual(
+            apply_profile.summarize_plugin_changes(records, {"foo@m": True}),
+            (0, 0))
+
+    def test_dropped_stale_delta_counts_as_reenable(self):
+        # Removing a local false lets the user-scope true govern again: a
+        # genuine enable even though the map carries no entry.
+        records = [_rec("a@m", True, "user"), _rec("a@m", False, "local")]
+        self.assertEqual(
+            apply_profile.summarize_plugin_changes(records, {}), (0, 1))
+
+    def test_reapplied_delta_is_not_a_toggle(self):
+        records = [_rec("a@m", True, "user"), _rec("a@m", False, "local")]
+        self.assertEqual(
+            apply_profile.summarize_plugin_changes(records, {"a@m": False}),
+            (0, 0))
+
+    def test_local_only_carry_matching_state_is_not_a_toggle(self):
+        records = [_rec("x@m", True, "local")]
+        self.assertEqual(
+            apply_profile.summarize_plugin_changes(records, {"x@m": True}),
+            (0, 0))
+
+
 class MergeSettingsTests(unittest.TestCase):
     def test_foreign_keys_survive(self):
         existing = {"permissions": {"allow": ["Bash(ls *)"]}}
@@ -513,8 +549,39 @@ class CliEndToEndTests(unittest.TestCase):
         self._install_fake_claude_records(
             [_rec("keep@m", True, "user"), _rec("foo@m", True, "local"),
              _rec("foo@m", False, "managed")])
-        self.assertEqual(self.run_apply("test-profile").returncode, 0)
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.read_settings()["enabledPlugins"], {"foo@m": True})
+        # The carry re-records state the managed policy overrides anyway;
+        # it must not be reported as a toggle.
+        self.assertIn("plugins disabled: 0  plugins enabled: 0", result.stdout)
+
+    def test_permissive_switch_counts_reenables_from_dropped_deltas(self):
+        self.assertEqual(self.run_apply("test-profile").returncode, 0)
+        # The CLI now reports the written deltas back at local scope.
+        self._install_fake_claude_records(FAKE_PLUGIN_RECORDS + [
+            _rec("drop@m", False, "local"), _rec("wake@m", True, "local")])
+        result = self.run_apply("everything")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # drop@m's stale local false is dropped -> user-scope true governs
+        # again: one genuine re-enable, even though it has no map entry.
+        self.assertEqual(self.read_settings()["enabledPlugins"], {"wake@m": True})
+        self.assertIn("plugins disabled: 0  plugins enabled: 1", result.stdout)
+
+    def test_bom_prefixed_settings_and_profiles_are_read(self):
+        (self.repo / ".claude").mkdir()
+        (self.repo / ".claude" / "settings.local.json").write_bytes(
+            b'\xef\xbb\xbf' + json.dumps(
+                {"permissions": {"allow": ["Bash(ls *)"]}}).encode())
+        profiles_path = self.home / ".claude" / "plugin-configure" / "profiles.json"
+        profiles_path.write_bytes(
+            b'\xef\xbb\xbf' + json.dumps(PROFILES_FIXTURE).encode())
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        settings = self.read_settings()
+        self.assertEqual(settings["permissions"], {"allow": ["Bash(ls *)"]})
+        self.assertEqual(settings["enabledPlugins"],
+                         {"drop@m": False, "wake@m": True})
 
     def test_profile_matching_current_state_writes_empty_overrides(self):
         result = self.run_apply("everything")
