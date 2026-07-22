@@ -8,8 +8,8 @@ Usage:
 
 Profiles are allowlists (skills/plugins to keep ON) read from
 ~/.claude/plugin-configure/profiles.json, bootstrapped with starter profiles on
-first run. Applying a profile writes .claude/settings.local.json (owning only the
-skillOverrides / disabledPlugins / enabledPlugins keys), a marker at
+first run. Applying a profile writes .claude/settings.local.json (owning only
+the skillOverrides / enabledPlugins keys), a marker at
 .claude/plugin-configure.json, and a .git/info/exclude entry for the marker.
 """
 
@@ -22,11 +22,11 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-SELF_PLUGIN_ID = "plugin-configure@ooj-tools"
+SELF_PLUGIN_NAME = "plugin-configure"
 PLUGIN_VERSION = "0.1.0"
 MARKER_RELPATH = ".claude/plugin-configure.json"
 
-_SCOPE_RANK = {"user": 1, "project": 2, "local": 3}
+_SCOPE_RANK = {"user": 1, "project": 2, "local": 3, "managed": 4}
 
 PROFILES_PATH = Path.home() / ".claude" / "plugin-configure" / "profiles.json"
 
@@ -234,12 +234,15 @@ def ensure_git_exclude(root):
     exclude = Path(out)
     if not exclude.is_absolute():
         exclude = root / exclude
-    lines = exclude.read_text().splitlines() if exclude.exists() else []
-    if MARKER_RELPATH in lines:
+    text = exclude.read_text() if exclude.exists() else ""
+    if MARKER_RELPATH in text.splitlines():
         return
     exclude.parent.mkdir(parents=True, exist_ok=True)
+    # An existing file may lack a trailing newline; appending straight onto
+    # its last line would corrupt both entries.
+    prefix = "" if not text or text.endswith("\n") else "\n"
     with exclude.open("a") as fh:
-        fh.write(MARKER_RELPATH + "\n")
+        fh.write(prefix + MARKER_RELPATH + "\n")
 
 
 def main(argv=None):
@@ -273,7 +276,8 @@ def main(argv=None):
     root = find_repo_root(Path.cwd()) or Path.cwd()
 
     if args.skip:
-        marker = write_marker(root, {"skipped": True, "appliedAt": utc_now_iso()})
+        marker = write_marker(root, {"skipped": True, "appliedAt": utc_now_iso(),
+                                     "pluginVersion": PLUGIN_VERSION})
         ensure_git_exclude(root)
         print(f"skip recorded at {marker}; the session nudge is silenced here")
         return 0
@@ -291,10 +295,10 @@ def main(argv=None):
 
     records = load_plugin_records()
     if records is None:
-        disabled, enabled = [], []
+        enabled_plugins = {}
     else:
-        disabled, enabled = compute_plugin_arrays(
-            effective_plugin_state(records), spec.get("plugins", []))
+        enabled_plugins = compute_enabled_plugins(
+            baseline_plugin_state(records), spec.get("plugins", []))
 
     settings_path = root / ".claude" / "settings.local.json"
     try:
@@ -306,14 +310,19 @@ def main(argv=None):
         return 2
 
     atomic_write_json(settings_path, merge_settings(
-        existing, overrides, disabled, enabled, records is not None))
+        existing, overrides, enabled_plugins, records is not None))
     write_marker(root, {"profile": args.profile, "appliedAt": utc_now_iso(),
                         "pluginVersion": PLUGIN_VERSION})
     ensure_git_exclude(root)
 
+    if records is None:
+        plugin_note = "plugins: left untouched (inventory unavailable)"
+    else:
+        on = sum(1 for state in enabled_plugins.values() if state)
+        plugin_note = (f"plugins disabled: {len(enabled_plugins) - on}"
+                       f"  plugins enabled: {on}")
     print(f"applied profile {args.profile!r} to {settings_path}")
-    print(f"  skills off: {len(overrides)}  plugins disabled: {len(disabled)}"
-          f"  plugins enabled: {len(enabled)}")
+    print(f"  skills off: {len(overrides)}  {plugin_note}")
     print("  takes effect from the next Claude Code session in this directory")
     return 0
 
@@ -322,7 +331,7 @@ def effective_plugin_state(records):
     """Collapse `claude plugin list --json` records into effective enabled state.
 
     A plugin can have one record per scope; the effective state is the record
-    with the highest-precedence scope (local > project > user).
+    with the highest-precedence scope (managed > local > project > user).
 
     Args:
         records: List of dicts with at least "id", "enabled" and "scope" keys.
@@ -356,37 +365,87 @@ def compute_skill_overrides(discovered, allowed):
     return {name: "off" for name in sorted(discovered) if name not in allowed_set}
 
 
-def compute_plugin_arrays(state, allowed):
-    """Compute the local-scope plugin arrays for a profile.
+def _is_self(plugin_id):
+    """Return True when plugin_id refers to this plugin under any marketplace.
+
+    Matching by name (the part before "@") keeps the self-protection intact
+    when the plugin is loaded under a different marketplace id, e.g. during
+    --plugin-dir development.
 
     Args:
-        state: Effective plugin state from effective_plugin_state().
+        plugin_id: A "name@marketplace" plugin id.
+    """
+    return plugin_id.split("@", 1)[0] == SELF_PLUGIN_NAME
+
+
+def baseline_plugin_state(records):
+    """Effective enabled state per plugin, ignoring local-scope overrides.
+
+    Local-scope records reflect what a previous profile application wrote to
+    .claude/settings.local.json, so using them as the baseline would make
+    re-applying a profile undo its own work: a delta that is already in
+    effect looks like "no change needed", and the wholesale enabledPlugins
+    replacement would then drop it. Plugins that only have a local record
+    fall back to that record so they stay visible.
+
+    Args:
+        records: List of dicts with at least "id", "enabled" and "scope" keys.
+
+    Returns:
+        Dict mapping plugin id to its baseline enabled bool.
+    """
+    non_local = effective_plugin_state(
+        [rec for rec in records if rec.get("scope") != "local"])
+    everything = effective_plugin_state(records)
+    return {pid: non_local.get(pid, on) for pid, on in everything.items()}
+
+
+def compute_enabled_plugins(baseline, allowed):
+    """Build the local-scope enabledPlugins map for a profile.
+
+    Claude Code expresses plugin state as a single enabledPlugins object
+    mapping "name@marketplace" ids to booleans (true = enabled, false =
+    disabled); there is no disabledPlugins key. Only deltas from the baseline
+    are written, so plugins the profile agrees with keep following their
+    user/project-scope setting.
+
+    Args:
+        baseline: Plugin state from baseline_plugin_state().
         allowed: Plugin ids ("name@marketplace") the profile keeps enabled.
 
     Returns:
-        Tuple (disabled, enabled), both sorted: currently-enabled ids to
-        disable (never SELF_PLUGIN_ID), and profile ids that are installed but
-        currently disabled, to enable locally.
+        Dict of {plugin_id: bool} for every installed plugin whose baseline
+        state differs from what the profile wants, insertion-ordered by
+        sorted id. This plugin itself is never disabled (and is only
+        force-enabled when the profile lists it explicitly).
     """
-    allowed_set = set(allowed) | {SELF_PLUGIN_ID}
-    disabled = sorted(pid for pid, on in state.items() if on and pid not in allowed_set)
-    enabled = sorted(pid for pid in set(allowed) if pid in state and not state[pid])
-    return disabled, enabled
+    allowed_set = set(allowed)
+    result = {}
+    for pid in sorted(baseline):
+        if _is_self(pid) and pid not in allowed_set:
+            continue
+        desired = pid in allowed_set
+        if desired != baseline[pid]:
+            result[pid] = desired
+    return result
 
 
-def merge_settings(existing, overrides, disabled, enabled, plugins_known):
+def merge_settings(existing, overrides, enabled_plugins, plugins_known):
     """Merge profile-owned keys into a settings dict, preserving everything else.
 
-    The script owns exactly skillOverrides, disabledPlugins and enabledPlugins.
-    Empty arrays remove their key (stale state from a previous run). When
-    plugins_known is False the two plugin arrays are left exactly as they were,
-    because the plugin inventory could not be read.
+    The script owns exactly skillOverrides and enabledPlugins. skillOverrides
+    is always written, even when empty — its presence marks the repo as
+    configured (the SessionStart hook greps for it). An empty enabledPlugins
+    map removes the key (stale deltas from a previous run). When plugins_known
+    is False the plugin keys are left exactly as they were, because the plugin
+    inventory could not be read. A leftover disabledPlugins key (written by
+    pre-release revisions of this script; not a real Claude Code setting) is
+    dropped whenever the inventory was readable.
 
     Args:
         existing: Parsed current settings (may be empty).
         overrides: skillOverrides map to install.
-        disabled: disabledPlugins list to install.
-        enabled: enabledPlugins list to install.
+        enabled_plugins: enabledPlugins map ({plugin_id: bool}) to install.
         plugins_known: Whether the plugin inventory was available.
 
     Returns:
@@ -395,12 +454,11 @@ def merge_settings(existing, overrides, disabled, enabled, plugins_known):
     merged = dict(existing)
     merged["skillOverrides"] = dict(overrides)
     if plugins_known:
-        for key, value in (("disabledPlugins", list(disabled)),
-                           ("enabledPlugins", list(enabled))):
-            if value:
-                merged[key] = value
-            else:
-                merged.pop(key, None)
+        if enabled_plugins:
+            merged["enabledPlugins"] = dict(enabled_plugins)
+        else:
+            merged.pop("enabledPlugins", None)
+        merged.pop("disabledPlugins", None)
     return merged
 
 

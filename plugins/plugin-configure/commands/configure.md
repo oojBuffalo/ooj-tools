@@ -26,6 +26,8 @@ Follow these steps exactly:
 4. Relay the script's summary (skills turned off, plugins disabled/enabled,
    file paths) and remind the user the new settings take effect from the next
    Claude Code session in this directory — the current session keeps its
-   already-loaded skills. Profiles can be edited any time at
+   already-loaded skills. If the script warned on stderr that the plugin
+   inventory could not be read, say that plugin toggles were left untouched
+   and only skills were configured. Profiles can be edited any time at
    `~/.claude/plugin-configure/profiles.json`; re-running this command
    re-applies over the previous choice.

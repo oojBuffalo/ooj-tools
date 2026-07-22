@@ -15,9 +15,11 @@ native `/skills` and `/plugin` menus.
 - Picking a profile runs `scripts/apply_profile.py`, which:
   - scans `~/.claude/skills/` + `<repo>/.claude/skills/` and writes
     `skillOverrides: {<non-profile skill>: "off"}`;
-  - reads `claude plugin list --json` and writes local `disabledPlugins`
-    (enabled plugins not in the profile) and `enabledPlugins` (profile plugins
-    currently disabled). It never disables itself;
+  - reads `claude plugin list --json` and writes a local `enabledPlugins`
+    map (`{"name@marketplace": true|false}`): `false` for enabled plugins the
+    profile excludes, `true` for profile plugins currently disabled. Plugins
+    already matching the profile keep following their user/project-scope
+    setting, and it never disables itself;
   - writes the marker `.claude/plugin-configure.json` (profile, timestamp) and
     adds it to `.git/info/exclude`.
 - Skipping writes only the marker (`{"skipped": true}`) so the nudge never
