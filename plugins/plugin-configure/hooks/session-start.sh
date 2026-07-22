@@ -5,10 +5,25 @@
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 [ -n "$root" ] || exit 0
 [ -e "$root/.claude/plugin-configure.json" ] && exit 0
-settings="$root/.claude/settings.local.json"
-if [ -f "$settings" ] && grep -q '"skillOverrides"' "$settings"; then
-  exit 0
-fi
+
+# Already-curated repos are silent: a real top-level skillOverrides key in
+# either the local or the checked-in project settings counts. This must be a
+# JSON key check, not a grep -- the bare token can appear inside string
+# values (e.g. a permissions rule) in a repo that is not configured at all.
+python3 - "$root/.claude/settings.local.json" "$root/.claude/settings.json" <<'PY' 2>/dev/null && exit 0
+import json
+import sys
+
+for path in sys.argv[1:]:
+    try:
+        with open(path) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        continue
+    if isinstance(doc, dict) and "skillOverrides" in doc:
+        sys.exit(0)
+sys.exit(1)
+PY
 
 # Build the nudge with real JSON escaping: CLAUDE_PLUGIN_ROOT can contain
 # characters (quotes, backslashes) that would corrupt a hand-interpolated

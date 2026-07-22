@@ -188,7 +188,8 @@ def load_plugin_records():
         print(f"warning: could not read plugin inventory ({exc}); "
               "leaving plugin settings untouched", file=sys.stderr)
         return None
-    if not isinstance(records, list):
+    if not isinstance(records, list) or not all(
+            isinstance(rec, dict) for rec in records):
         print("warning: unexpected `claude plugin list --json` output; "
               "leaving plugin settings untouched", file=sys.stderr)
         return None
@@ -263,23 +264,31 @@ def main(argv=None):
                         help="ensure profiles.json exists, list profiles, exit")
     args = parser.parse_args(argv)
 
-    profiles_doc, created = ensure_profiles(PROFILES_PATH)
-    profiles = profiles_doc.get("profiles", {})
+    root = find_repo_root(Path.cwd()) or Path.cwd()
+
+    if args.skip:
+        # Deliberately before any profiles.json read: silencing the nudge is
+        # the recovery path and must work even when that file is corrupt.
+        marker = write_marker(root, {"skipped": True, "appliedAt": utc_now_iso(),
+                                     "pluginVersion": PLUGIN_VERSION})
+        ensure_git_exclude(root)
+        print(f"skip recorded at {marker}; the session nudge is silenced here")
+        return 0
+
+    try:
+        profiles_doc, created = ensure_profiles(PROFILES_PATH)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"error: could not read {PROFILES_PATH} ({exc}); "
+              "fix it and re-run", file=sys.stderr)
+        return 2
+    profiles = (profiles_doc.get("profiles", {})
+                if isinstance(profiles_doc, dict) else {})
     if created:
         print(f"bootstrapped starter profiles at {PROFILES_PATH}")
 
     if args.bootstrap_only:
         for name in sorted(profiles):
             print(f"{name}: {profiles[name].get('description', '')}")
-        return 0
-
-    root = find_repo_root(Path.cwd()) or Path.cwd()
-
-    if args.skip:
-        marker = write_marker(root, {"skipped": True, "appliedAt": utc_now_iso(),
-                                     "pluginVersion": PLUGIN_VERSION})
-        ensure_git_exclude(root)
-        print(f"skip recorded at {marker}; the session nudge is silenced here")
         return 0
 
     if not args.profile or args.profile not in profiles:
@@ -297,8 +306,7 @@ def main(argv=None):
     if records is None:
         enabled_plugins = {}
     else:
-        enabled_plugins = compute_enabled_plugins(
-            baseline_plugin_state(records), spec.get("plugins", []))
+        enabled_plugins = compute_enabled_plugins(records, spec.get("plugins", []))
 
     settings_path = root / ".claude" / "settings.local.json"
     try:
@@ -378,54 +386,51 @@ def _is_self(plugin_id):
     return plugin_id.split("@", 1)[0] == SELF_PLUGIN_NAME
 
 
-def baseline_plugin_state(records):
-    """Effective enabled state per plugin, ignoring local-scope overrides.
-
-    Local-scope records reflect what a previous profile application wrote to
-    .claude/settings.local.json, so using them as the baseline would make
-    re-applying a profile undo its own work: a delta that is already in
-    effect looks like "no change needed", and the wholesale enabledPlugins
-    replacement would then drop it. Plugins that only have a local record
-    fall back to that record so they stay visible.
-
-    Args:
-        records: List of dicts with at least "id", "enabled" and "scope" keys.
-
-    Returns:
-        Dict mapping plugin id to its baseline enabled bool.
-    """
-    non_local = effective_plugin_state(
-        [rec for rec in records if rec.get("scope") != "local"])
-    everything = effective_plugin_state(records)
-    return {pid: non_local.get(pid, on) for pid, on in everything.items()}
-
-
-def compute_enabled_plugins(baseline, allowed):
+def compute_enabled_plugins(records, allowed):
     """Build the local-scope enabledPlugins map for a profile.
 
     Claude Code expresses plugin state as a single enabledPlugins object
     mapping "name@marketplace" ids to booleans (true = enabled, false =
-    disabled); there is no disabledPlugins key. Only deltas from the baseline
-    are written, so plugins the profile agrees with keep following their
-    user/project-scope setting.
+    disabled); there is no disabledPlugins key. Plugins governed by a
+    user/project record get delta entries only, written when the profile
+    disagrees with that baseline, so they keep following their own scope's
+    setting otherwise. The baseline deliberately ignores local-scope records:
+    those live in the very key this script rewrites, so treating them as the
+    baseline would make a re-applied profile see its own deltas as "no change
+    needed" and drop them. Plugins known ONLY at local scope always get an
+    explicit entry, because the local entry is their sole enablement record
+    and omitting it would erase their state entirely. Managed-scope plugins
+    are skipped: managed settings outrank local, so an entry could never
+    take effect.
 
     Args:
-        baseline: Plugin state from baseline_plugin_state().
+        records: Parsed `claude plugin list --json` records.
         allowed: Plugin ids ("name@marketplace") the profile keeps enabled.
 
     Returns:
-        Dict of {plugin_id: bool} for every installed plugin whose baseline
-        state differs from what the profile wants, insertion-ordered by
-        sorted id. This plugin itself is never disabled (and is only
-        force-enabled when the profile lists it explicitly).
+        Dict of {plugin_id: bool}, insertion-ordered by sorted id. This
+        plugin itself is never disabled — its local-only state is preserved
+        verbatim, and it is only force-enabled when the profile lists it
+        explicitly.
     """
+    non_local = effective_plugin_state(
+        [rec for rec in records if rec.get("scope") != "local"])
+    everything = effective_plugin_state(records)
+    managed = {rec.get("id") for rec in records if rec.get("scope") == "managed"}
     allowed_set = set(allowed)
     result = {}
-    for pid in sorted(baseline):
+    for pid in sorted(everything):
+        if pid in managed:
+            continue
+        local_only = pid not in non_local
         if _is_self(pid) and pid not in allowed_set:
+            if local_only:
+                result[pid] = everything[pid]
             continue
         desired = pid in allowed_set
-        if desired != baseline[pid]:
+        if local_only:
+            result[pid] = desired
+        elif desired != non_local[pid]:
             result[pid] = desired
     return result
 

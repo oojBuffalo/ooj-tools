@@ -19,7 +19,9 @@ native `/skills` and `/plugin` menus.
     map (`{"name@marketplace": true|false}`): `false` for enabled plugins the
     profile excludes, `true` for profile plugins currently disabled. Plugins
     already matching the profile keep following their user/project-scope
-    setting, and it never disables itself;
+    setting, plugins known only at local scope always keep an explicit entry
+    (that entry is their sole record), managed-scope plugins are left alone,
+    and it never disables itself;
   - writes the marker `.claude/plugin-configure.json` (profile, timestamp) and
     adds it to `.git/info/exclude`.
 - Skipping writes only the marker (`{"skipped": true}`) so the nudge never
@@ -37,7 +39,9 @@ bootstrapped on first run with `general-dev`, `minimal`, `web-dev` and
 
 - Automatic: open Claude Code in a fresh git repo and answer the card.
 - Manual / re-apply / non-git dirs: `/plugin-configure:configure`
-- Headless skip: `python3 scripts/apply_profile.py --skip`
+- Headless skip — the marker lands in the repo you run it **from**, so cd to
+  the repo being silenced first:
+  `python3 /path/to/plugin-configure/scripts/apply_profile.py --skip`
 
 ## Tests
 

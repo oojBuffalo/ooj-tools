@@ -54,6 +54,27 @@ rm "$tmp/repo/.claude/plugin-configure.json"
 echo '{"skillOverrides": {"x": "off"}}' > "$tmp/repo/.claude/settings.local.json"
 expect_silent "skillOverrides silences the hook" "$tmp/repo"
 
+expect_nudge() { # label dir
+  out=$(cd "$2" && CLAUDE_PLUGIN_ROOT="/fake/plugin root" bash "$HOOK"; echo "rc=$?")
+  case "$out" in
+    *hookSpecificOutput*"rc=0") echo "PASS: $1" ;;
+    *) echo "FAIL: $1 -> $out"; fails=$((fails + 1)) ;;
+  esac
+}
+
+# 6. "skillOverrides" as a string VALUE (not a key) -> still nudges
+echo '{"permissions": {"deny": ["skillOverrides"]}}' > "$tmp/repo/.claude/settings.local.json"
+expect_nudge "token as value does not silence" "$tmp/repo"
+
+# 7. invalid JSON settings -> still nudges, no crash
+echo '{not json' > "$tmp/repo/.claude/settings.local.json"
+expect_nudge "invalid settings JSON does not silence" "$tmp/repo"
+rm "$tmp/repo/.claude/settings.local.json"
+
+# 8. project-scope .claude/settings.json with skillOverrides -> silent
+echo '{"skillOverrides": {"x": "off"}}' > "$tmp/repo/.claude/settings.json"
+expect_silent "project-scope skillOverrides silences the hook" "$tmp/repo"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILURE(S)"; fi
 exit "$fails"

@@ -47,28 +47,6 @@ class EffectivePluginStateTests(unittest.TestCase):
         self.assertEqual(apply_profile.effective_plugin_state(records), {})
 
 
-class BaselinePluginStateTests(unittest.TestCase):
-    def test_local_scope_is_ignored(self):
-        records = [
-            {"id": "a@m", "enabled": True, "scope": "user"},
-            {"id": "a@m", "enabled": False, "scope": "local"},
-        ]
-        self.assertEqual(apply_profile.baseline_plugin_state(records), {"a@m": True})
-
-    def test_local_only_plugin_falls_back_to_local_state(self):
-        records = [{"id": "a@m", "enabled": False, "scope": "local"}]
-        self.assertEqual(apply_profile.baseline_plugin_state(records), {"a@m": False})
-
-    def test_mixed_local_and_non_local(self):
-        records = [
-            {"id": "a@m", "enabled": True, "scope": "user"},
-            {"id": "a@m", "enabled": False, "scope": "local"},
-            {"id": "b@m", "enabled": True, "scope": "local"},
-        ]
-        self.assertEqual(apply_profile.baseline_plugin_state(records),
-                         {"a@m": True, "b@m": True})
-
-
 class IsSelfTests(unittest.TestCase):
     def test_matches_any_marketplace(self):
         self.assertTrue(apply_profile._is_self("plugin-configure@ooj-tools"))
@@ -94,44 +72,81 @@ class ComputeSkillOverridesTests(unittest.TestCase):
         self.assertEqual(result, {"a": "off"})
 
 
+def _rec(pid, enabled, scope):
+    return {"id": pid, "enabled": enabled, "scope": scope}
+
+
 class ComputeEnabledPluginsTests(unittest.TestCase):
     def test_enabled_unlisted_gets_disabled(self):
-        baseline = {"a@m": True, "b@m": True}
+        records = [_rec("a@m", True, "user"), _rec("b@m", True, "user")]
         self.assertEqual(
-            apply_profile.compute_enabled_plugins(baseline, ["a@m"]),
+            apply_profile.compute_enabled_plugins(records, ["a@m"]),
             {"b@m": False})
 
     def test_matching_state_writes_no_entry(self):
-        baseline = {"a@m": True, "b@m": False}
-        self.assertEqual(apply_profile.compute_enabled_plugins(baseline, ["a@m"]), {})
+        records = [_rec("a@m", True, "user"), _rec("b@m", False, "user")]
+        self.assertEqual(apply_profile.compute_enabled_plugins(records, ["a@m"]), {})
 
     def test_listed_but_disabled_gets_enabled(self):
-        baseline = {"a@m": False}
+        records = [_rec("a@m", False, "user")]
         self.assertEqual(
-            apply_profile.compute_enabled_plugins(baseline, ["a@m"]), {"a@m": True})
+            apply_profile.compute_enabled_plugins(records, ["a@m"]), {"a@m": True})
 
     def test_listed_but_not_installed_is_ignored(self):
-        self.assertEqual(apply_profile.compute_enabled_plugins({}, ["ghost@m"]), {})
+        self.assertEqual(apply_profile.compute_enabled_plugins([], ["ghost@m"]), {})
+
+    def test_delta_is_against_non_local_baseline(self):
+        # A local False written by a previous run must not make the disable
+        # look like "no change needed" (it would then be dropped wholesale).
+        records = [_rec("a@m", True, "user"), _rec("a@m", False, "local")]
+        self.assertEqual(
+            apply_profile.compute_enabled_plugins(records, []), {"a@m": False})
+
+    def test_local_only_allowed_always_gets_explicit_entry(self):
+        # Its only record is the local entry this script owns; dropping it
+        # would erase the plugin's state entirely.
+        records = [_rec("a@m", True, "local")]
+        self.assertEqual(
+            apply_profile.compute_enabled_plugins(records, ["a@m"]), {"a@m": True})
+
+    def test_local_only_excluded_always_gets_explicit_entry(self):
+        records = [_rec("a@m", False, "local")]
+        self.assertEqual(
+            apply_profile.compute_enabled_plugins(records, []), {"a@m": False})
+
+    def test_managed_plugin_is_skipped_entirely(self):
+        records = [_rec("locked-on@m", True, "managed"),
+                   _rec("locked-off@m", False, "managed")]
+        self.assertEqual(
+            apply_profile.compute_enabled_plugins(records, ["locked-off@m"]), {})
 
     def test_self_is_never_disabled(self):
-        baseline = {SELF_ID: True, "b@m": True}
+        records = [_rec(SELF_ID, True, "user"), _rec("b@m", True, "user")]
         self.assertEqual(
-            apply_profile.compute_enabled_plugins(baseline, []), {"b@m": False})
+            apply_profile.compute_enabled_plugins(records, []), {"b@m": False})
 
     def test_self_under_dev_marketplace_is_protected_too(self):
-        baseline = {"plugin-configure@dev-dir": True}
-        self.assertEqual(apply_profile.compute_enabled_plugins(baseline, []), {})
+        records = [_rec("plugin-configure@dev-dir", True, "user")]
+        self.assertEqual(apply_profile.compute_enabled_plugins(records, []), {})
+
+    def test_self_local_only_state_is_preserved_verbatim(self):
+        for state in (True, False):
+            records = [_rec(SELF_ID, state, "local")]
+            self.assertEqual(
+                apply_profile.compute_enabled_plugins(records, []),
+                {SELF_ID: state})
 
     def test_self_not_force_enabled_unless_listed(self):
+        records = [_rec(SELF_ID, False, "user")]
+        self.assertEqual(apply_profile.compute_enabled_plugins(records, []), {})
         self.assertEqual(
-            apply_profile.compute_enabled_plugins({SELF_ID: False}, []), {})
-        self.assertEqual(
-            apply_profile.compute_enabled_plugins({SELF_ID: False}, [SELF_ID]),
+            apply_profile.compute_enabled_plugins(records, [SELF_ID]),
             {SELF_ID: True})
 
     def test_output_is_sorted_by_id(self):
-        baseline = {"z@m": True, "a@m": True, "m@m": False}
-        result = apply_profile.compute_enabled_plugins(baseline, ["m@m"])
+        records = [_rec("z@m", True, "user"), _rec("a@m", True, "user"),
+                   _rec("m@m", False, "user")]
+        result = apply_profile.compute_enabled_plugins(records, ["m@m"])
         self.assertEqual(list(result), ["a@m", "m@m", "z@m"])
 
 
@@ -326,7 +341,7 @@ PROFILES_FIXTURE = {
         "everything": {
             "description": "keeps all fixture skills and plugins",
             "skills": ["alpha-skill", "beta-skill", "kept-skill"],
-            "plugins": ["drop@m", "keep@m", "wake@m"],
+            "plugins": ["drop@m", "keep@m", "wake@m", "localonly@m"],
         },
     },
 }
@@ -361,6 +376,10 @@ class CliEndToEndTests(unittest.TestCase):
         fake = self.bindir / "claude"
         fake.write_text(script)
         fake.chmod(0o755)
+
+    def _install_fake_claude_records(self, records):
+        self._install_fake_claude(
+            "#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % json.dumps(records))
 
     def run_apply(self, *args, cwd=None):
         return subprocess.run(
@@ -412,6 +431,55 @@ class CliEndToEndTests(unittest.TestCase):
         self.assertEqual(settings["enabledPlugins"], {"keep@m": False})
         self.assertEqual(self.read_marker()["profile"], "other-profile")
 
+    def test_second_apply_preserves_local_scope_deltas(self):
+        # Regression guard for the call-site wiring: after the first apply,
+        # the real CLI reports the just-written deltas back at local scope.
+        # A second apply must keep computing against the non-local baseline,
+        # not see its own writes as "no change needed" and drop them.
+        self.assertEqual(self.run_apply("test-profile").returncode, 0)
+        first = self.read_settings()
+        self.assertEqual(first["enabledPlugins"], {"drop@m": False, "wake@m": True})
+        self._install_fake_claude_records(FAKE_PLUGIN_RECORDS + [
+            _rec("drop@m", False, "local"), _rec("wake@m", True, "local")])
+        self.assertEqual(self.run_apply("test-profile").returncode, 0)
+        self.assertEqual(self.read_settings(), first)
+
+    def test_local_only_allowed_plugin_keeps_its_entry(self):
+        # A plugin whose only record is local-scope lives entirely in the key
+        # this script rewrites; an allowlisted one must not lose its enable.
+        self._install_fake_claude_records(
+            FAKE_PLUGIN_RECORDS + [_rec("localonly@m", True, "local")])
+        self.assertEqual(self.run_apply("everything").returncode, 0)
+        self.assertEqual(self.read_settings()["enabledPlugins"],
+                         {"localonly@m": True, "wake@m": True})
+
+    def test_local_only_excluded_plugin_stays_disabled_across_reapply(self):
+        self._install_fake_claude_records(
+            FAKE_PLUGIN_RECORDS + [_rec("localonly@m", True, "local")])
+        self.assertEqual(self.run_apply("test-profile").returncode, 0)
+        expected = {"drop@m": False, "localonly@m": False, "wake@m": True}
+        self.assertEqual(self.read_settings()["enabledPlugins"], expected)
+        # The CLI now reports everything this script just wrote at local scope.
+        self._install_fake_claude_records(FAKE_PLUGIN_RECORDS + [
+            _rec("drop@m", False, "local"), _rec("wake@m", True, "local"),
+            _rec("localonly@m", False, "local")])
+        self.assertEqual(self.run_apply("test-profile").returncode, 0)
+        self.assertEqual(self.read_settings()["enabledPlugins"], expected)
+
+    def test_self_installed_at_local_scope_is_not_disabled(self):
+        self._install_fake_claude_records(
+            [_rec("keep@m", True, "user"), _rec(SELF_ID, True, "local")])
+        self.assertEqual(self.run_apply("test-profile").returncode, 0)
+        self.assertEqual(self.read_settings()["enabledPlugins"], {SELF_ID: True})
+
+    def test_managed_plugin_is_left_alone(self):
+        self._install_fake_claude_records(
+            [_rec("keep@m", True, "user"), _rec("locked@m", True, "managed")])
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("enabledPlugins", self.read_settings())
+        self.assertIn("plugins disabled: 0  plugins enabled: 0", result.stdout)
+
     def test_profile_matching_current_state_writes_empty_overrides(self):
         result = self.run_apply("everything")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -448,6 +516,29 @@ class CliEndToEndTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("unexpected", result.stderr)
         self.assertNotIn("enabledPlugins", self.read_settings())
+
+    def test_claude_cli_non_dict_records_leave_plugin_settings_untouched(self):
+        self._install_fake_claude("#!/bin/sh\necho '[\"garbage\", 42]'\n")
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("unexpected", result.stderr)
+        self.assertIn("left untouched", result.stdout)
+        self.assertNotIn("enabledPlugins", self.read_settings())
+
+    def test_corrupt_profiles_json_errors_cleanly(self):
+        profiles_path = self.home / ".claude" / "plugin-configure" / "profiles.json"
+        profiles_path.write_text("{broken")
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("fix it and re-run", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_skip_works_even_with_corrupt_profiles_json(self):
+        profiles_path = self.home / ".claude" / "plugin-configure" / "profiles.json"
+        profiles_path.write_text("{broken")
+        result = self.run_apply("--skip")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.read_marker()["skipped"])
 
     def test_skip_writes_only_marker(self):
         result = self.run_apply("--skip")
