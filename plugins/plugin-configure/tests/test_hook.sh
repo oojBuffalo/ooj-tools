@@ -34,6 +34,16 @@ assert doc["hookSpecificOutput"]["hookEventName"] == "SessionStart", "wrong even
 assert "/fake/plugin root" in ctx, "plugin root missing from context"
 ' && echo "PASS: nudge is valid JSON with plugin root" || { echo "FAIL: nudge is valid JSON with plugin root"; fails=$((fails + 1)); }
 
+# 3b. hostile plugin roots (double quote, backslash) still emit valid JSON
+for weird in '/fake/pl"ug"in' '/fake/pl\ugin\root'; do
+  out=$(cd "$tmp/repo" && CLAUDE_PLUGIN_ROOT="$weird" bash "$HOOK")
+  if echo "$out" | python3 -c 'import json, sys; json.load(sys.stdin)' >/dev/null 2>&1; then
+    echo "PASS: valid JSON for hostile root $weird"
+  else
+    echo "FAIL: valid JSON for hostile root $weird -> $out"; fails=$((fails + 1))
+  fi
+done
+
 # 4. marker file -> silent
 mkdir -p "$tmp/repo/.claude"
 echo '{"skipped": true}' > "$tmp/repo/.claude/plugin-configure.json"
