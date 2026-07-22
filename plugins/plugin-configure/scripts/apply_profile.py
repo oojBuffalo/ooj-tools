@@ -112,6 +112,29 @@ def atomic_write_json(path, data):
         raise
 
 
+def valid_profiles(profiles):
+    """Return True when a profiles mapping has the expected structure.
+
+    Expected: {name: {"skills": [str, ...], "plugins": [str, ...]}} with both
+    lists optional. Guards the rest of the script against hand-edited
+    profiles.json files that are valid JSON but the wrong shape.
+
+    Args:
+        profiles: The "profiles" value from profiles.json (any type).
+    """
+    if not isinstance(profiles, dict):
+        return False
+    for spec in profiles.values():
+        if not isinstance(spec, dict):
+            return False
+        for key in ("skills", "plugins"):
+            value = spec.get(key, [])
+            if not isinstance(value, list) or not all(
+                    isinstance(item, str) for item in value):
+                return False
+    return True
+
+
 def ensure_profiles(path):
     """Load the profiles document, bootstrapping starters when missing.
 
@@ -281,8 +304,13 @@ def main(argv=None):
         print(f"error: could not read {PROFILES_PATH} ({exc}); "
               "fix it and re-run", file=sys.stderr)
         return 2
-    profiles = (profiles_doc.get("profiles", {})
-                if isinstance(profiles_doc, dict) else {})
+    profiles = (profiles_doc.get("profiles")
+                if isinstance(profiles_doc, dict) else None)
+    if not valid_profiles(profiles):
+        print(f"error: {PROFILES_PATH} has an unexpected structure — "
+              'expected {"profiles": {<name>: {"skills": [...], '
+              '"plugins": [...]}}}; fix it and re-run', file=sys.stderr)
+        return 2
     if created:
         print(f"bootstrapped starter profiles at {PROFILES_PATH}")
 
@@ -326,8 +354,14 @@ def main(argv=None):
     if records is None:
         plugin_note = "plugins: left untouched (inventory unavailable)"
     else:
-        on = sum(1 for state in enabled_plugins.values() if state)
-        plugin_note = (f"plugins disabled: {len(enabled_plugins) - on}"
+        # Count only real changes: entries that merely re-record a plugin's
+        # current effective state (local-only carries, preserved self /
+        # managed records) are not toggles.
+        current = effective_plugin_state(records)
+        changed = {pid: state for pid, state in enabled_plugins.items()
+                   if state != current.get(pid)}
+        on = sum(1 for state in changed.values() if state)
+        plugin_note = (f"plugins disabled: {len(changed) - on}"
                        f"  plugins enabled: {on}")
     print(f"applied profile {args.profile!r} to {settings_path}")
     print(f"  skills off: {len(overrides)}  {plugin_note}")
@@ -409,24 +443,35 @@ def compute_enabled_plugins(records, allowed):
 
     Returns:
         Dict of {plugin_id: bool}, insertion-ordered by sorted id. This
-        plugin itself is never disabled — its local-only state is preserved
-        verbatim, and it is only force-enabled when the profile lists it
-        explicitly.
+        plugin itself is never disabled — any existing local record of its
+        state is preserved verbatim, and it is only force-enabled when the
+        profile lists it explicitly. Plugins the delta logic skips (self,
+        managed) likewise keep their existing local record: that record is
+        the user's state, not ours to destroy in the wholesale replacement.
     """
     non_local = effective_plugin_state(
         [rec for rec in records if rec.get("scope") != "local"])
+    local = effective_plugin_state(
+        [rec for rec in records if rec.get("scope") == "local"])
     everything = effective_plugin_state(records)
     managed = {rec.get("id") for rec in records if rec.get("scope") == "managed"}
     allowed_set = set(allowed)
     result = {}
     for pid in sorted(everything):
         if pid in managed:
+            # No entry we write can take effect while the managed policy
+            # exists, but an existing local record must survive the rewrite
+            # so the user's state is intact if the policy is ever lifted.
+            if pid in local:
+                result[pid] = local[pid]
+            continue
+        if _is_self(pid) and pid not in allowed_set:
+            # Never disable self: its enablement in this repo may live at
+            # any scope, so keep whatever local record exists as-is.
+            if pid in local:
+                result[pid] = local[pid]
             continue
         local_only = pid not in non_local
-        if _is_self(pid) and pid not in allowed_set:
-            if local_only:
-                result[pid] = everything[pid]
-            continue
         desired = pid in allowed_set
         if local_only:
             result[pid] = desired

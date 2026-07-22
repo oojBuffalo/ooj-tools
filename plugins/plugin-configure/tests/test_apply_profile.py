@@ -120,6 +120,17 @@ class ComputeEnabledPluginsTests(unittest.TestCase):
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, ["locked-off@m"]), {})
 
+    def test_managed_plugin_keeps_existing_local_record(self):
+        # The delta is unenforceable while the policy exists, but the user's
+        # local record must survive the wholesale rewrite regardless of what
+        # the profile wants.
+        records = [_rec("a@m", True, "local"), _rec("a@m", False, "managed")]
+        self.assertEqual(
+            apply_profile.compute_enabled_plugins(records, ["a@m"]), {"a@m": True})
+        records = [_rec("b@m", False, "local"), _rec("b@m", True, "managed")]
+        self.assertEqual(
+            apply_profile.compute_enabled_plugins(records, []), {"b@m": False})
+
     def test_self_is_never_disabled(self):
         records = [_rec(SELF_ID, True, "user"), _rec("b@m", True, "user")]
         self.assertEqual(
@@ -135,6 +146,14 @@ class ComputeEnabledPluginsTests(unittest.TestCase):
             self.assertEqual(
                 apply_profile.compute_enabled_plugins(records, []),
                 {SELF_ID: state})
+
+    def test_self_mixed_scope_local_record_is_preserved(self):
+        # Disabled at user scope but enabled locally in this repo: dropping
+        # the local enable would let the user-scope false govern, disabling
+        # self permanently.
+        records = [_rec(SELF_ID, False, "user"), _rec(SELF_ID, True, "local")]
+        self.assertEqual(
+            apply_profile.compute_enabled_plugins(records, []), {SELF_ID: True})
 
     def test_self_not_force_enabled_unless_listed(self):
         records = [_rec(SELF_ID, False, "user")]
@@ -469,6 +488,16 @@ class CliEndToEndTests(unittest.TestCase):
     def test_self_installed_at_local_scope_is_not_disabled(self):
         self._install_fake_claude_records(
             [_rec("keep@m", True, "user"), _rec(SELF_ID, True, "local")])
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read_settings()["enabledPlugins"], {SELF_ID: True})
+        # A preserved record is not a toggle; the summary must not count it.
+        self.assertIn("plugins disabled: 0  plugins enabled: 0", result.stdout)
+
+    def test_self_disabled_at_user_scope_keeps_local_enable(self):
+        self._install_fake_claude_records(
+            [_rec("keep@m", True, "user"), _rec(SELF_ID, False, "user"),
+             _rec(SELF_ID, True, "local")])
         self.assertEqual(self.run_apply("test-profile").returncode, 0)
         self.assertEqual(self.read_settings()["enabledPlugins"], {SELF_ID: True})
 
@@ -479,6 +508,13 @@ class CliEndToEndTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("enabledPlugins", self.read_settings())
         self.assertIn("plugins disabled: 0  plugins enabled: 0", result.stdout)
+
+    def test_managed_plugin_keeps_local_record_end_to_end(self):
+        self._install_fake_claude_records(
+            [_rec("keep@m", True, "user"), _rec("foo@m", True, "local"),
+             _rec("foo@m", False, "managed")])
+        self.assertEqual(self.run_apply("test-profile").returncode, 0)
+        self.assertEqual(self.read_settings()["enabledPlugins"], {"foo@m": True})
 
     def test_profile_matching_current_state_writes_empty_overrides(self):
         result = self.run_apply("everything")
@@ -539,6 +575,22 @@ class CliEndToEndTests(unittest.TestCase):
         result = self.run_apply("--skip")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.read_marker()["skipped"])
+
+    def test_structurally_corrupt_profiles_json_errors_cleanly(self):
+        # Valid JSON, wrong shape: hand-edited files must get the clean
+        # error path, not a traceback.
+        profiles_path = self.home / ".claude" / "plugin-configure" / "profiles.json"
+        for bad in ('{"profiles": ["x"]}', '{"profiles": {"p": "oops"}}',
+                    '{"profiles": "general"}', '[]',
+                    '{"profiles": {"p": {"skills": null}}}'):
+            profiles_path.write_text(bad)
+            result = self.run_apply("p")
+            self.assertEqual(result.returncode, 2, f"{bad}: {result.stderr}")
+            self.assertIn("fix it and re-run", result.stderr, bad)
+            self.assertNotIn("Traceback", result.stderr, bad)
+            bootstrap = self.run_apply("--bootstrap-only")
+            self.assertEqual(bootstrap.returncode, 2, f"{bad}: {bootstrap.stderr}")
+            self.assertNotIn("Traceback", bootstrap.stderr, bad)
 
     def test_skip_writes_only_marker(self):
         result = self.run_apply("--skip")

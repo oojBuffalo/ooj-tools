@@ -75,6 +75,21 @@ rm "$tmp/repo/.claude/settings.local.json"
 echo '{"skillOverrides": {"x": "off"}}' > "$tmp/repo/.claude/settings.json"
 expect_silent "project-scope skillOverrides silences the hook" "$tmp/repo"
 
+# 9. pathological local file must not mask the curated project settings
+python3 -c 'n = 100000; print("[" * n + "]" * n)' > "$tmp/repo/.claude/settings.local.json"
+expect_silent "unparseable local file does not mask curated project settings" "$tmp/repo"
+rm "$tmp/repo/.claude/settings.json"
+
+# 10. BOM-prefixed curated settings -> still silent
+printf '\xef\xbb\xbf{"skillOverrides": {"x": "off"}}' > "$tmp/repo/.claude/settings.local.json"
+expect_silent "BOM-prefixed curated settings silences the hook" "$tmp/repo"
+rm "$tmp/repo/.claude/settings.local.json"
+
+# 11. FIFO at a settings path -> no hang, falls through to the nudge
+mkfifo "$tmp/repo/.claude/settings.local.json"
+expect_nudge "FIFO settings file does not hang the hook" "$tmp/repo"
+rm "$tmp/repo/.claude/settings.local.json"
+
 echo "---"
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILURE(S)"; fi
 exit "$fails"

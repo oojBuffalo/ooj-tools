@@ -12,13 +12,22 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 # values (e.g. a permissions rule) in a repo that is not configured at all.
 python3 - "$root/.claude/settings.local.json" "$root/.claude/settings.json" <<'PY' 2>/dev/null && exit 0
 import json
+import os
 import sys
 
 for path in sys.argv[1:]:
+    # isfile() rejects FIFOs and other specials whose open() could block --
+    # this hook must never stall a session start.
+    if not os.path.isfile(path):
+        continue
     try:
-        with open(path) as fh:
+        # utf-8-sig tolerates a BOM (common from Windows editors) and reads
+        # plain UTF-8 unchanged.
+        with open(path, encoding="utf-8-sig") as fh:
             doc = json.load(fh)
-    except (OSError, ValueError):
+    except Exception:
+        # Any per-file failure (corrupt JSON, RecursionError from absurd
+        # nesting, unreadable file) must not mask a valid key in the other.
         continue
     if isinstance(doc, dict) and "skillOverrides" in doc:
         sys.exit(0)
