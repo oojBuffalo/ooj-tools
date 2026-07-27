@@ -19,9 +19,11 @@ native `/skills` and `/plugin` menus.
     map (`{"name@marketplace": true|false}`): `false` for enabled plugins the
     profile excludes, `true` for profile plugins currently disabled. Plugins
     already matching the profile keep following their user/project-scope
-    setting, plugins known only at local scope always keep an explicit entry
-    (that entry is their sole record), managed-scope plugins are left alone,
-    and it never disables itself;
+    setting — until the profile has to move one, after which it keeps an
+    explicit entry for good (the CLI folds local overrides into the state it
+    reports, so an entry that got dropped would silently hand the plugin back
+    to its outer scope). Managed-scope plugins are left alone, and it never
+    disables itself;
   - writes the marker `.claude/plugin-configure.json` (profile, timestamp) and
     adds it to `.git/info/exclude`.
 - Skipping writes only the marker (`{"skipped": true}`) so the nudge never

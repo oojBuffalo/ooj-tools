@@ -332,12 +332,6 @@ def main(argv=None):
         [Path.home() / ".claude" / "skills", root / ".claude" / "skills"])
     overrides = compute_skill_overrides(discovered, spec.get("skills", []))
 
-    records = load_plugin_records()
-    if records is None:
-        enabled_plugins = {}
-    else:
-        enabled_plugins = compute_enabled_plugins(records, spec.get("plugins", []))
-
     settings_path = root / ".claude" / "settings.local.json"
     try:
         existing = (json.loads(settings_path.read_text(encoding="utf-8-sig"))
@@ -346,6 +340,24 @@ def main(argv=None):
         print(f"error: {settings_path} is not valid JSON ({exc}); "
               "fix it and re-run", file=sys.stderr)
         return 2
+    if not isinstance(existing, dict):
+        print(f"error: {settings_path} is not a JSON object; "
+              "fix it and re-run", file=sys.stderr)
+        return 2
+
+    # The entries we already own must be read before computing the new map:
+    # the plugin inventory folds them into its "enabled" values, so they are
+    # the only way to tell our own writes apart from an outer baseline.
+    current_local = existing.get("enabledPlugins")
+    if not isinstance(current_local, dict):
+        current_local = {}
+
+    records = load_plugin_records()
+    if records is None:
+        enabled_plugins = {}
+    else:
+        enabled_plugins = compute_enabled_plugins(
+            records, spec.get("plugins", []), current_local)
 
     atomic_write_json(settings_path, merge_settings(
         existing, overrides, enabled_plugins, records is not None))
@@ -416,62 +428,83 @@ def _is_self(plugin_id):
     return plugin_id.split("@", 1)[0] == SELF_PLUGIN_NAME
 
 
-def compute_enabled_plugins(records, allowed):
+def compute_enabled_plugins(records, allowed, current_local=None):
     """Build the local-scope enabledPlugins map for a profile.
 
     Claude Code expresses plugin state as a single enabledPlugins object
     mapping "name@marketplace" ids to booleans (true = enabled, false =
-    disabled); there is no disabledPlugins key. Plugins governed by a
-    user/project record get delta entries only, written when the profile
-    disagrees with that baseline, so they keep following their own scope's
-    setting otherwise. The baseline deliberately ignores local-scope records:
-    those live in the very key this script rewrites, so treating them as the
-    baseline would make a re-applied profile see its own deltas as "no change
-    needed" and drop them. Plugins known ONLY at local scope always get an
-    explicit entry, because the local entry is their sole enablement record
-    and omitting it would erase their state entirely. Managed-scope plugins
-    are skipped: managed settings outrank local, so an entry could never
-    take effect.
+    disabled); there is no disabledPlugins key. Plugins whose reported state
+    is a genuine outer (user/project) baseline get delta entries only,
+    written when the profile disagrees with that baseline, so they keep
+    following their own scope's setting otherwise.
+
+    The catch: `claude plugin list --json` reports where a plugin is
+    *installed* in "scope" and folds any local enabledPlugins override into
+    "enabled". A plugin we already wrote an entry for therefore reports back
+    our own value at scope "user", and its record says nothing about the
+    baseline underneath. Such plugins are "pinned": they keep an explicit
+    entry on every run, because dropping one as "already matching" would
+    hand the plugin back to its outer scope and silently undo the profile.
+    That is what `current_local` is for -- the enabledPlugins map already in
+    the settings file, i.e. the entries this script owns. Plugins with no
+    entry there report a trustworthy baseline and stay delta-managed.
+
+    Managed-scope plugins are skipped: managed settings outrank local, so an
+    entry could never take effect.
 
     Args:
         records: Parsed `claude plugin list --json` records.
         allowed: Plugin ids ("name@marketplace") the profile keeps enabled.
+        current_local: enabledPlugins map already present in the local
+            settings file, or None on a first run.
 
     Returns:
         Dict of {plugin_id: bool}, insertion-ordered by sorted id. This
-        plugin itself is never disabled — any existing local record of its
-        state is preserved verbatim, and it is only force-enabled when the
-        profile lists it explicitly. Plugins the delta logic skips (self,
-        managed) likewise keep their existing local record: that record is
-        the user's state, not ours to destroy in the wholesale replacement.
+        plugin itself is never disabled — any existing entry for it is
+        preserved verbatim, and it is only force-enabled when the profile
+        lists it explicitly. Plugins the delta logic skips (self, managed)
+        likewise keep their existing entry: that entry is the user's state,
+        not ours to destroy in the wholesale replacement.
     """
-    non_local = effective_plugin_state(
+    pinned_map = {pid: bool(val) for pid, val in (current_local or {}).items()
+                  if isinstance(pid, str)}
+    outer = effective_plugin_state(
         [rec for rec in records if rec.get("scope") != "local"])
     local = effective_plugin_state(
         [rec for rec in records if rec.get("scope") == "local"])
     everything = effective_plugin_state(records)
     managed = {rec.get("id") for rec in records if rec.get("scope") == "managed"}
     allowed_set = set(allowed)
+
+    def carried(pid):
+        """Return the existing local state for a skipped plugin, if any."""
+        if pid in local:
+            return local[pid]
+        return pinned_map.get(pid)
+
     result = {}
     for pid in sorted(everything):
         if pid in managed:
             # No entry we write can take effect while the managed policy
-            # exists, but an existing local record must survive the rewrite
+            # exists, but an existing local entry must survive the rewrite
             # so the user's state is intact if the policy is ever lifted.
-            if pid in local:
-                result[pid] = local[pid]
+            keep = carried(pid)
+            if keep is not None:
+                result[pid] = keep
             continue
         if _is_self(pid) and pid not in allowed_set:
             # Never disable self: its enablement in this repo may live at
-            # any scope, so keep whatever local record exists as-is.
-            if pid in local:
-                result[pid] = local[pid]
+            # any scope, so keep whatever local entry exists as-is.
+            keep = carried(pid)
+            if keep is not None:
+                result[pid] = keep
             continue
-        local_only = pid not in non_local
         desired = pid in allowed_set
-        if local_only:
+        # Pinned (we already own an entry) or local-only (the entry is the
+        # plugin's sole record) => always explicit. Otherwise delta.
+        if pid in pinned_map or pid in local or pid not in outer:
             result[pid] = desired
-        elif desired != non_local[pid]:
+        elif desired != outer[pid]:
             result[pid] = desired
     return result
 
