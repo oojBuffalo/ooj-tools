@@ -8,7 +8,7 @@ markdown: no hooks, scripts, or commands. The convention is documented in
 
 | Skill | Trigger examples | What it does |
 |-------|------------------|--------------|
-| `conventional-commits` | "write a conventional commit", "format this commit message", "what type should this commit be" | Concise Conventional Commits v1.0.0 reference: types, rules, breaking-change syntax, worked examples, and a staged-diff-first process. |
+| `conventional-commits` | "write a conventional commit", "format this commit message", "what type should this commit be" | Concise Conventional Commits v1.0.0 reference: types, spec requirements kept separate from optional house style, breaking-change syntax, worked examples, and a staged-diff-first process. |
 
 In Codex, invoke a skill by name: `$conventional-commits`.
 
