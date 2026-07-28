@@ -18,6 +18,26 @@ One plugin per directory. Structure contract for every `plugins/<name>/`:
   `hooks/hooks.json`, `scripts/`.
 - Only create the directories the plugin actually uses.
 
+## Loose skills: the ooj-skills bundle
+
+- A standalone skill never gets its own plugin. Every loose skill lands in the
+  single `plugins/ooj-skills/` bundle regardless of topic — no themed bundles,
+  no second skills-only plugin.
+- A skill graduates to its own plugin only when it needs a plugin's machinery
+  (commands, agents, hooks, scripts, or an MCP server) — never because of
+  subject matter.
+- Bundle contract: `.claude-plugin/plugin.json` + `skills/<skill>/SKILL.md` +
+  the bundle `README.md` skill table. No `.codex-plugin/` (Codex falls back to
+  the Claude manifest) and no hooks/scripts/commands — a skill that needs those
+  is a plugin, not a bundle entry.
+- Skill directories sit flat under `skills/`; the directory name is the skill
+  name and must be unique across the bundle.
+- Every skill description carries Claude Code trigger phrases AND the Codex
+  invocation sentence: `In Codex, use when the user invokes $<name>.`
+- Versioning: adding a skill bumps MINOR; editing an existing skill bumps
+  PATCH. Update the bundle README table and the marketplace/plugin.json
+  descriptions (they must stay in sync) in the same change.
+
 ## Gotchas
 
 - Reference intra-plugin paths via `"${CLAUDE_PLUGIN_ROOT}"` (quoted), never

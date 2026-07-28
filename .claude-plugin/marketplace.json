@@ -25,6 +25,11 @@
       "name": "plugin-configure",
       "source": "./plugins/plugin-configure",
       "description": "Cold-start profile setup: offers a curated skill/plugin profile on first launch in an unconfigured repo and writes it to .claude/settings.local.json; native /skills and /plugin menus handle everything after."
+    },
+    {
+      "name": "ooj-skills",
+      "source": "./plugins/ooj-skills",
+      "description": "Every loose skill that doesn't warrant a plugin of its own, in one bundle. Currently: conventional-commits, a concise reference for writing Conventional Commits messages — pure skills, no hooks or scripts."
     }
   ]
 }

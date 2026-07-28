@@ -1,0 +1,13 @@
+{
+  "name": "ooj-skills",
+  "version": "0.1.0",
+  "description": "Every loose skill that doesn't warrant a plugin of its own, in one bundle. Currently: conventional-commits, a concise reference for writing Conventional Commits messages — pure skills, no hooks or scripts.",
+  "author": {
+    "name": "Elijah Wilt",
+    "email": "elijahwilt.github@gmail.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/oojBuffalo/ooj-tools/tree/master/plugins/ooj-skills",
+  "repository": "https://github.com/oojBuffalo/ooj-tools",
+  "keywords": ["skills", "bundle", "git", "conventional-commits", "commit-messages"]
+}
