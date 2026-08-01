@@ -20,6 +20,11 @@
       "name": "spec-to-tasks",
       "source": "./plugins/spec-to-tasks",
       "description": "Turn a PRD, spec, or MVP doc into a readable markdown task tree: parse into tasks, score complexity, and expand into subtasks — native skills, no MCP server or API keys."
+    },
+    {
+      "name": "plugin-configure",
+      "source": "./plugins/plugin-configure",
+      "description": "Cold-start profile setup: offers a curated skill/plugin profile on first launch in an unconfigured repo and writes it to .claude/settings.local.json; native /skills and /plugin menus handle everything after."
     }
   ]
 }

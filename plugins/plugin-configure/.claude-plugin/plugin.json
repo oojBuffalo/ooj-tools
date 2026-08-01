@@ -1,0 +1,13 @@
+{
+  "name": "plugin-configure",
+  "version": "0.1.0",
+  "description": "Cold-start skill/plugin curation: on first launch in an unconfigured repo, writes a chosen profile (skillOverrides + plugin enables/disables) into .claude/settings.local.json, so new repos don't start with everything on.",
+  "author": {
+    "name": "Elijah Wilt",
+    "email": "elijahwilt.github@gmail.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/oojBuffalo/ooj-tools/tree/master/plugins/plugin-configure",
+  "repository": "https://github.com/oojBuffalo/ooj-tools",
+  "keywords": ["skills", "plugins", "profiles", "settings", "cold-start"]
+}
