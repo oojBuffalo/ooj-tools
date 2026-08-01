@@ -20,10 +20,11 @@ native `/skills` and `/plugin` menus.
     profile excludes, `true` for profile plugins currently disabled. Plugins
     already matching the profile keep following their user/project-scope
     setting — until the profile has to move one, after which it keeps an
-    explicit entry for good (the CLI folds local overrides into the state it
-    reports, so an entry that got dropped would silently hand the plugin back
-    to its outer scope). Managed-scope plugins are left alone, and it never
-    disables itself;
+    explicit entry for good, including while it is temporarily uninstalled
+    (the CLI folds local overrides into the state it reports, so an entry that
+    got dropped would silently hand the plugin back to its outer scope).
+    Project records from other repositories are ignored. Managed-scope plugins
+    are left alone, and it never disables itself;
   - writes the marker `.claude/plugin-configure.json` (profile, timestamp) and
     adds it to `.git/info/exclude`.
 - Skipping writes only the marker (`{"skipped": true}`) so the nudge never

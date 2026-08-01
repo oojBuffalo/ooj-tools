@@ -16,35 +16,75 @@ import apply_profile
 SELF_ID = f"{apply_profile.SELF_PLUGIN_NAME}@ooj-tools"
 
 
+def _plugin_record(plugin_id, enabled, scope, project_path=None):
+    raw = {"id": plugin_id, "enabled": enabled, "scope": scope}
+    if project_path is not None:
+        raw["projectPath"] = str(project_path)
+    return apply_profile.PluginRecord.parse(raw)
+
+
 class EffectivePluginStateTests(unittest.TestCase):
     def test_single_user_record(self):
-        records = [{"id": "a@m", "enabled": True, "scope": "user"}]
+        records = [_plugin_record("a@m", True, "user")]
         self.assertEqual(apply_profile.effective_plugin_state(records), {"a@m": True})
 
     def test_local_beats_user(self):
         records = [
-            {"id": "a@m", "enabled": True, "scope": "user"},
-            {"id": "a@m", "enabled": False, "scope": "local"},
+            _plugin_record("a@m", True, "user"),
+            _plugin_record("a@m", False, "local"),
         ]
         self.assertEqual(apply_profile.effective_plugin_state(records), {"a@m": False})
 
     def test_project_beats_user_regardless_of_order(self):
         records = [
-            {"id": "a@m", "enabled": True, "scope": "project"},
-            {"id": "a@m", "enabled": False, "scope": "user"},
+            _plugin_record("a@m", True, "project", "/repo"),
+            _plugin_record("a@m", False, "user"),
         ]
         self.assertEqual(apply_profile.effective_plugin_state(records), {"a@m": True})
 
     def test_managed_beats_local(self):
         records = [
-            {"id": "a@m", "enabled": True, "scope": "local"},
-            {"id": "a@m", "enabled": False, "scope": "managed"},
+            _plugin_record("a@m", True, "local"),
+            _plugin_record("a@m", False, "managed"),
         ]
         self.assertEqual(apply_profile.effective_plugin_state(records), {"a@m": False})
 
-    def test_record_without_id_is_ignored(self):
-        records = [{"enabled": True, "scope": "user"}]
-        self.assertEqual(apply_profile.effective_plugin_state(records), {})
+
+class PluginRecordParsingTests(unittest.TestCase):
+    def test_parses_valid_records_into_domain_types(self):
+        records = apply_profile.parse_plugin_records([
+            {"id": "a@m", "enabled": True, "scope": "user"},
+            {"id": "b@m", "enabled": False, "scope": "project",
+             "projectPath": "/repo"},
+        ])
+        self.assertEqual(records[0].plugin_id, apply_profile.PluginId("a", "m"))
+        self.assertIs(records[1].scope, apply_profile.PluginScope.PROJECT)
+        self.assertEqual(records[1].project_path, Path("/repo"))
+
+    def test_rejects_missing_or_malformed_required_fields(self):
+        malformed_records = [
+            {},
+            {"id": "missing-marketplace", "enabled": True, "scope": "user"},
+            {"id": "a@m", "enabled": 1, "scope": "user"},
+            {"id": "a@m", "enabled": True, "scope": "global"},
+            {"id": "a@m", "enabled": True, "scope": "project"},
+            {"id": "a@m", "enabled": True, "scope": "project",
+             "projectPath": 42},
+        ]
+        for malformed in malformed_records:
+            with self.subTest(record=malformed):
+                with self.assertRaises(apply_profile.PluginInventoryFormatError):
+                    apply_profile.parse_plugin_records([malformed])
+
+    def test_filters_project_records_to_the_current_repo(self):
+        records = (
+            _plugin_record("a@m", True, "user"),
+            _plugin_record("a@m", False, "project", "/other"),
+            _plugin_record("b@m", True, "project", "/repo"),
+        )
+        relevant = apply_profile.records_for_repo(records, Path("/repo"))
+        self.assertEqual(
+            [str(record.plugin_id) for record in relevant], ["a@m", "b@m"])
 
 
 class IsSelfTests(unittest.TestCase):
@@ -72,60 +112,62 @@ class ComputeSkillOverridesTests(unittest.TestCase):
         self.assertEqual(result, {"a": "off"})
 
 
-def _rec(pid, enabled, scope):
-    return {"id": pid, "enabled": enabled, "scope": scope}
-
-
 class ComputeEnabledPluginsTests(unittest.TestCase):
     def test_enabled_unlisted_gets_disabled(self):
-        records = [_rec("a@m", True, "user"), _rec("b@m", True, "user")]
+        records = [_plugin_record("a@m", True, "user"),
+                   _plugin_record("b@m", True, "user")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, ["a@m"]),
             {"b@m": False})
 
     def test_matching_state_writes_no_entry(self):
-        records = [_rec("a@m", True, "user"), _rec("b@m", False, "user")]
+        records = [_plugin_record("a@m", True, "user"),
+                   _plugin_record("b@m", False, "user")]
         self.assertEqual(apply_profile.compute_enabled_plugins(records, ["a@m"]), {})
 
     def test_pinned_entry_is_rewritten_even_when_state_matches(self):
         # b@m reports false only because our own entry says so; without the
         # pin it would look like a matching baseline and lose its entry.
-        records = [_rec("a@m", True, "user"), _rec("b@m", False, "user")]
+        records = [_plugin_record("a@m", True, "user"),
+                   _plugin_record("b@m", False, "user")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(
                 records, ["a@m"], {"b@m": False}),
             {"b@m": False})
 
     def test_pinned_entry_follows_the_new_profile(self):
-        records = [_rec("a@m", True, "user"), _rec("b@m", False, "user")]
+        records = [_plugin_record("a@m", True, "user"),
+                   _plugin_record("b@m", False, "user")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(
                 records, ["a@m", "b@m"], {"b@m": False}),
             {"b@m": True})
 
-    def test_pin_for_an_uninstalled_plugin_is_dropped(self):
-        records = [_rec("a@m", True, "user")]
+    def test_pin_for_an_uninstalled_plugin_is_preserved(self):
+        records = [_plugin_record("a@m", True, "user")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(
                 records, ["a@m"], {"gone@m": False}),
-            {})
+            {"gone@m": False})
 
     def test_pin_never_overrides_self_protection(self):
-        records = [_rec("a@m", True, "user"), _rec(SELF_ID, True, "user")]
+        records = [_plugin_record("a@m", True, "user"),
+                   _plugin_record(SELF_ID, True, "user")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(
                 records, ["a@m"], {SELF_ID: True}),
             {SELF_ID: True})
 
     def test_pin_is_carried_for_managed_plugins(self):
-        records = [_rec("a@m", True, "user"), _rec("m@m", True, "managed")]
+        records = [_plugin_record("a@m", True, "user"),
+                   _plugin_record("m@m", True, "managed")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(
                 records, ["a@m"], {"m@m": False}),
             {"m@m": False})
 
     def test_listed_but_disabled_gets_enabled(self):
-        records = [_rec("a@m", False, "user")]
+        records = [_plugin_record("a@m", False, "user")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, ["a@m"]), {"a@m": True})
 
@@ -135,25 +177,26 @@ class ComputeEnabledPluginsTests(unittest.TestCase):
     def test_delta_is_against_non_local_baseline(self):
         # A local False written by a previous run must not make the disable
         # look like "no change needed" (it would then be dropped wholesale).
-        records = [_rec("a@m", True, "user"), _rec("a@m", False, "local")]
+        records = [_plugin_record("a@m", True, "user"),
+                   _plugin_record("a@m", False, "local")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, []), {"a@m": False})
 
     def test_local_only_allowed_always_gets_explicit_entry(self):
         # Its only record is the local entry this script owns; dropping it
         # would erase the plugin's state entirely.
-        records = [_rec("a@m", True, "local")]
+        records = [_plugin_record("a@m", True, "local")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, ["a@m"]), {"a@m": True})
 
     def test_local_only_excluded_always_gets_explicit_entry(self):
-        records = [_rec("a@m", False, "local")]
+        records = [_plugin_record("a@m", False, "local")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, []), {"a@m": False})
 
     def test_managed_plugin_is_skipped_entirely(self):
-        records = [_rec("locked-on@m", True, "managed"),
-                   _rec("locked-off@m", False, "managed")]
+        records = [_plugin_record("locked-on@m", True, "managed"),
+                   _plugin_record("locked-off@m", False, "managed")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, ["locked-off@m"]), {})
 
@@ -161,25 +204,28 @@ class ComputeEnabledPluginsTests(unittest.TestCase):
         # The delta is unenforceable while the policy exists, but the user's
         # local record must survive the wholesale rewrite regardless of what
         # the profile wants.
-        records = [_rec("a@m", True, "local"), _rec("a@m", False, "managed")]
+        records = [_plugin_record("a@m", True, "local"),
+                   _plugin_record("a@m", False, "managed")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, ["a@m"]), {"a@m": True})
-        records = [_rec("b@m", False, "local"), _rec("b@m", True, "managed")]
+        records = [_plugin_record("b@m", False, "local"),
+                   _plugin_record("b@m", True, "managed")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, []), {"b@m": False})
 
     def test_self_is_never_disabled(self):
-        records = [_rec(SELF_ID, True, "user"), _rec("b@m", True, "user")]
+        records = [_plugin_record(SELF_ID, True, "user"),
+                   _plugin_record("b@m", True, "user")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, []), {"b@m": False})
 
     def test_self_under_dev_marketplace_is_protected_too(self):
-        records = [_rec("plugin-configure@dev-dir", True, "user")]
+        records = [_plugin_record("plugin-configure@dev-dir", True, "user")]
         self.assertEqual(apply_profile.compute_enabled_plugins(records, []), {})
 
     def test_self_local_only_state_is_preserved_verbatim(self):
         for state in (True, False):
-            records = [_rec(SELF_ID, state, "local")]
+            records = [_plugin_record(SELF_ID, state, "local")]
             self.assertEqual(
                 apply_profile.compute_enabled_plugins(records, []),
                 {SELF_ID: state})
@@ -188,27 +234,30 @@ class ComputeEnabledPluginsTests(unittest.TestCase):
         # Disabled at user scope but enabled locally in this repo: dropping
         # the local enable would let the user-scope false govern, disabling
         # self permanently.
-        records = [_rec(SELF_ID, False, "user"), _rec(SELF_ID, True, "local")]
+        records = [_plugin_record(SELF_ID, False, "user"),
+                   _plugin_record(SELF_ID, True, "local")]
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, []), {SELF_ID: True})
 
     def test_self_not_force_enabled_unless_listed(self):
-        records = [_rec(SELF_ID, False, "user")]
+        records = [_plugin_record(SELF_ID, False, "user")]
         self.assertEqual(apply_profile.compute_enabled_plugins(records, []), {})
         self.assertEqual(
             apply_profile.compute_enabled_plugins(records, [SELF_ID]),
             {SELF_ID: True})
 
     def test_output_is_sorted_by_id(self):
-        records = [_rec("z@m", True, "user"), _rec("a@m", True, "user"),
-                   _rec("m@m", False, "user")]
+        records = [_plugin_record("z@m", True, "user"),
+                   _plugin_record("a@m", True, "user"),
+                   _plugin_record("m@m", False, "user")]
         result = apply_profile.compute_enabled_plugins(records, ["m@m"])
         self.assertEqual(list(result), ["a@m", "m@m", "z@m"])
 
 
 class SummarizePluginChangesTests(unittest.TestCase):
     def test_fresh_disable_and_enable_counted(self):
-        records = [_rec("a@m", True, "user"), _rec("b@m", False, "user")]
+        records = [_plugin_record("a@m", True, "user"),
+                   _plugin_record("b@m", False, "user")]
         self.assertEqual(
             apply_profile.summarize_plugin_changes(
                 records, {"a@m": False, "b@m": True}),
@@ -217,7 +266,8 @@ class SummarizePluginChangesTests(unittest.TestCase):
     def test_carried_managed_conflict_record_is_not_a_toggle(self):
         # The carried local true can never take effect while the managed
         # false exists; nothing changes either way.
-        records = [_rec("foo@m", True, "local"), _rec("foo@m", False, "managed")]
+        records = [_plugin_record("foo@m", True, "local"),
+                   _plugin_record("foo@m", False, "managed")]
         self.assertEqual(
             apply_profile.summarize_plugin_changes(records, {"foo@m": True}),
             (0, 0))
@@ -225,18 +275,20 @@ class SummarizePluginChangesTests(unittest.TestCase):
     def test_dropped_stale_delta_counts_as_reenable(self):
         # Removing a local false lets the user-scope true govern again: a
         # genuine enable even though the map carries no entry.
-        records = [_rec("a@m", True, "user"), _rec("a@m", False, "local")]
+        records = [_plugin_record("a@m", True, "user"),
+                   _plugin_record("a@m", False, "local")]
         self.assertEqual(
             apply_profile.summarize_plugin_changes(records, {}), (0, 1))
 
     def test_reapplied_delta_is_not_a_toggle(self):
-        records = [_rec("a@m", True, "user"), _rec("a@m", False, "local")]
+        records = [_plugin_record("a@m", True, "user"),
+                   _plugin_record("a@m", False, "local")]
         self.assertEqual(
             apply_profile.summarize_plugin_changes(records, {"a@m": False}),
             (0, 0))
 
     def test_local_only_carry_matching_state_is_not_a_toggle(self):
-        records = [_rec("x@m", True, "local")]
+        records = [_plugin_record("x@m", True, "local")]
         self.assertEqual(
             apply_profile.summarize_plugin_changes(records, {"x@m": True}),
             (0, 0))
@@ -411,10 +463,10 @@ class GitHelpersTests(unittest.TestCase):
 
 
 FAKE_PLUGIN_RECORDS = [
-    {"id": "keep@m", "enabled": True, "scope": "user"},
-    {"id": "drop@m", "enabled": True, "scope": "user"},
-    {"id": "wake@m", "enabled": False, "scope": "user"},
-    {"id": SELF_ID, "enabled": True, "scope": "user"},
+    _plugin_record("keep@m", True, "user"),
+    _plugin_record("drop@m", True, "user"),
+    _plugin_record("wake@m", False, "user"),
+    _plugin_record(SELF_ID, True, "user"),
 ]
 
 PROFILES_FIXTURE = {
@@ -453,8 +505,7 @@ class CliEndToEndTests(unittest.TestCase):
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         self.bindir = tmp / "bin"
         self.bindir.mkdir()
-        self._install_fake_claude(
-            "#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % json.dumps(FAKE_PLUGIN_RECORDS))
+        self._install_fake_claude_records(FAKE_PLUGIN_RECORDS)
         profiles_path = self.home / ".claude" / "plugin-configure" / "profiles.json"
         profiles_path.parent.mkdir(parents=True)
         profiles_path.write_text(json.dumps(PROFILES_FIXTURE))
@@ -470,8 +521,13 @@ class CliEndToEndTests(unittest.TestCase):
         fake.chmod(0o755)
 
     def _install_fake_claude_records(self, records):
+        raw_records = [
+            record.to_json() if isinstance(record, apply_profile.PluginRecord)
+            else record
+            for record in records
+        ]
         self._install_fake_claude(
-            "#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % json.dumps(records))
+            "#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % json.dumps(raw_records))
 
     def run_apply(self, *args, cwd=None):
         return subprocess.run(
@@ -507,12 +563,47 @@ class CliEndToEndTests(unittest.TestCase):
         exclude = (self.repo / ".git" / "info" / "exclude").read_text()
         self.assertIn(apply_profile.MARKER_RELPATH, exclude)
 
+    def test_unrelated_project_install_does_not_change_delta_baseline(self):
+        # The user record is enabled, while another repository has a disabled
+        # project installation of the same plugin. Excluding it here still
+        # requires a local false delta against this repository's user baseline.
+        unrelated_repo = Path(self._tmp.name) / "unrelated-repo"
+        self._install_fake_claude_records(FAKE_PLUGIN_RECORDS + [
+            _plugin_record("drop@m", False, "project", unrelated_repo)])
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read_settings()["enabledPlugins"],
+                         {"drop@m": False, "wake@m": True})
+
+    def test_current_project_install_remains_part_of_delta_baseline(self):
+        self._install_fake_claude_records(FAKE_PLUGIN_RECORDS + [
+            _plugin_record("drop@m", False, "project", self.repo)])
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read_settings()["enabledPlugins"], {"wake@m": True})
+
     def test_reapply_same_profile_is_idempotent(self):
         self.assertEqual(self.run_apply("test-profile").returncode, 0)
         first = self.read_settings()
         self.assertEqual(self.run_apply("test-profile").returncode, 0)
         self.assertEqual(self.read_settings(), first)
         self.assertEqual(first["enabledPlugins"], {"drop@m": False, "wake@m": True})
+
+    def test_pins_survive_temporary_inventory_absence_and_reinstall(self):
+        self.assertEqual(self.run_apply("test-profile").returncode, 0)
+        expected = self.read_settings()
+        self._install_fake_claude_records([
+            _plugin_record("keep@m", True, "user"),
+            _plugin_record(SELF_ID, True, "user"),
+        ])
+        missing = self.run_apply("test-profile")
+        self.assertEqual(missing.returncode, 0, missing.stderr)
+        self.assertEqual(self.read_settings(), expected)
+
+        self._install_fake_claude_records(FAKE_PLUGIN_RECORDS)
+        reinstalled = self.run_apply("test-profile")
+        self.assertEqual(reinstalled.returncode, 0, reinstalled.stderr)
+        self.assertEqual(self.read_settings(), expected)
 
     def test_profile_switch_replaces_owned_keys_wholesale(self):
         self.assertEqual(self.run_apply("test-profile").returncode, 0)
@@ -536,7 +627,8 @@ class CliEndToEndTests(unittest.TestCase):
         first = self.read_settings()
         self.assertEqual(first["enabledPlugins"], {"drop@m": False, "wake@m": True})
         self._install_fake_claude_records(FAKE_PLUGIN_RECORDS + [
-            _rec("drop@m", False, "local"), _rec("wake@m", True, "local")])
+            _plugin_record("drop@m", False, "local"),
+            _plugin_record("wake@m", True, "local")])
         self.assertEqual(self.run_apply("test-profile").returncode, 0)
         self.assertEqual(self.read_settings(), first)
 
@@ -544,27 +636,31 @@ class CliEndToEndTests(unittest.TestCase):
         # A plugin whose only record is local-scope lives entirely in the key
         # this script rewrites; an allowlisted one must not lose its enable.
         self._install_fake_claude_records(
-            FAKE_PLUGIN_RECORDS + [_rec("localonly@m", True, "local")])
+            FAKE_PLUGIN_RECORDS + [
+                _plugin_record("localonly@m", True, "local")])
         self.assertEqual(self.run_apply("everything").returncode, 0)
         self.assertEqual(self.read_settings()["enabledPlugins"],
                          {"localonly@m": True, "wake@m": True})
 
     def test_local_only_excluded_plugin_stays_disabled_across_reapply(self):
         self._install_fake_claude_records(
-            FAKE_PLUGIN_RECORDS + [_rec("localonly@m", True, "local")])
+            FAKE_PLUGIN_RECORDS + [
+                _plugin_record("localonly@m", True, "local")])
         self.assertEqual(self.run_apply("test-profile").returncode, 0)
         expected = {"drop@m": False, "localonly@m": False, "wake@m": True}
         self.assertEqual(self.read_settings()["enabledPlugins"], expected)
         # The CLI now reports everything this script just wrote at local scope.
         self._install_fake_claude_records(FAKE_PLUGIN_RECORDS + [
-            _rec("drop@m", False, "local"), _rec("wake@m", True, "local"),
-            _rec("localonly@m", False, "local")])
+            _plugin_record("drop@m", False, "local"),
+            _plugin_record("wake@m", True, "local"),
+            _plugin_record("localonly@m", False, "local")])
         self.assertEqual(self.run_apply("test-profile").returncode, 0)
         self.assertEqual(self.read_settings()["enabledPlugins"], expected)
 
     def test_self_installed_at_local_scope_is_not_disabled(self):
         self._install_fake_claude_records(
-            [_rec("keep@m", True, "user"), _rec(SELF_ID, True, "local")])
+            [_plugin_record("keep@m", True, "user"),
+             _plugin_record(SELF_ID, True, "local")])
         result = self.run_apply("test-profile")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.read_settings()["enabledPlugins"], {SELF_ID: True})
@@ -573,14 +669,16 @@ class CliEndToEndTests(unittest.TestCase):
 
     def test_self_disabled_at_user_scope_keeps_local_enable(self):
         self._install_fake_claude_records(
-            [_rec("keep@m", True, "user"), _rec(SELF_ID, False, "user"),
-             _rec(SELF_ID, True, "local")])
+            [_plugin_record("keep@m", True, "user"),
+             _plugin_record(SELF_ID, False, "user"),
+             _plugin_record(SELF_ID, True, "local")])
         self.assertEqual(self.run_apply("test-profile").returncode, 0)
         self.assertEqual(self.read_settings()["enabledPlugins"], {SELF_ID: True})
 
     def test_managed_plugin_is_left_alone(self):
         self._install_fake_claude_records(
-            [_rec("keep@m", True, "user"), _rec("locked@m", True, "managed")])
+            [_plugin_record("keep@m", True, "user"),
+             _plugin_record("locked@m", True, "managed")])
         result = self.run_apply("test-profile")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("enabledPlugins", self.read_settings())
@@ -588,8 +686,9 @@ class CliEndToEndTests(unittest.TestCase):
 
     def test_managed_plugin_keeps_local_record_end_to_end(self):
         self._install_fake_claude_records(
-            [_rec("keep@m", True, "user"), _rec("foo@m", True, "local"),
-             _rec("foo@m", False, "managed")])
+            [_plugin_record("keep@m", True, "user"),
+             _plugin_record("foo@m", True, "local"),
+             _plugin_record("foo@m", False, "managed")])
         result = self.run_apply("test-profile")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.read_settings()["enabledPlugins"], {"foo@m": True})
@@ -601,7 +700,8 @@ class CliEndToEndTests(unittest.TestCase):
         self.assertEqual(self.run_apply("test-profile").returncode, 0)
         # The CLI now reports the written deltas back at local scope.
         self._install_fake_claude_records(FAKE_PLUGIN_RECORDS + [
-            _rec("drop@m", False, "local"), _rec("wake@m", True, "local")])
+            _plugin_record("drop@m", False, "local"),
+            _plugin_record("wake@m", True, "local")])
         result = self.run_apply("everything")
         self.assertEqual(result.returncode, 0, result.stderr)
         # drop@m flips false -> true: one genuine re-enable. wake@m was
@@ -620,10 +720,10 @@ class CliEndToEndTests(unittest.TestCase):
         first = self.read_settings()
         self.assertEqual(first["enabledPlugins"], {"drop@m": False, "wake@m": True})
         self._install_fake_claude_records([
-            _rec("keep@m", True, "user"),
-            _rec("drop@m", False, "user"),   # folded: our false, not the baseline
-            _rec("wake@m", True, "user"),    # folded: our true
-            _rec(SELF_ID, True, "user"),
+            _plugin_record("keep@m", True, "user"),
+            _plugin_record("drop@m", False, "user"),  # folded local false
+            _plugin_record("wake@m", True, "user"),   # folded local true
+            _plugin_record(SELF_ID, True, "user"),
         ])
         result = self.run_apply("test-profile")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -634,10 +734,10 @@ class CliEndToEndTests(unittest.TestCase):
         # Pinning must not freeze a plugin at its first-applied value.
         self.assertEqual(self.run_apply("test-profile").returncode, 0)
         self._install_fake_claude_records([
-            _rec("keep@m", True, "user"),
-            _rec("drop@m", False, "user"),
-            _rec("wake@m", True, "user"),
-            _rec(SELF_ID, True, "user"),
+            _plugin_record("keep@m", True, "user"),
+            _plugin_record("drop@m", False, "user"),
+            _plugin_record("wake@m", True, "user"),
+            _plugin_record(SELF_ID, True, "user"),
         ])
         result = self.run_apply("other-profile")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -721,9 +821,47 @@ class CliEndToEndTests(unittest.TestCase):
         self.assertIn("left untouched", result.stdout)
         self.assertNotIn("enabledPlugins", self.read_settings())
 
+    def test_claude_cli_malformed_records_leave_plugin_settings_untouched(self):
+        (self.repo / ".claude").mkdir()
+        settings_path = self.repo / ".claude" / "settings.local.json"
+        settings_path.write_text(json.dumps(
+            {"enabledPlugins": {"x@m": False}, "permissions": {"allow": []}}))
+        malformed_inventories = [
+            [{}],
+            [{"id": "x@m", "enabled": "yes", "scope": "user"}],
+            [{"id": "x@m", "enabled": True, "scope": "unknown"}],
+            [{"id": "x@m", "enabled": True, "scope": "project"}],
+        ]
+        for inventory in malformed_inventories:
+            with self.subTest(inventory=inventory):
+                self._install_fake_claude_records(inventory)
+                result = self.run_apply("test-profile")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("unexpected", result.stderr)
+                self.assertIn("left untouched", result.stdout)
+                settings = self.read_settings()
+                self.assertEqual(settings["enabledPlugins"], {"x@m": False})
+                self.assertEqual(settings["permissions"], {"allow": []})
+
     def test_corrupt_profiles_json_errors_cleanly(self):
         profiles_path = self.home / ".claude" / "plugin-configure" / "profiles.json"
         profiles_path.write_text("{broken")
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("fix it and re-run", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_invalid_utf8_profiles_json_errors_cleanly(self):
+        profiles_path = self.home / ".claude" / "plugin-configure" / "profiles.json"
+        profiles_path.write_bytes(b"\xff")
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("fix it and re-run", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_deeply_nested_profiles_json_errors_cleanly(self):
+        profiles_path = self.home / ".claude" / "plugin-configure" / "profiles.json"
+        profiles_path.write_text("[" * 5000 + "]" * 5000)
         result = self.run_apply("test-profile")
         self.assertEqual(result.returncode, 2)
         self.assertIn("fix it and re-run", result.stderr)
@@ -742,7 +880,8 @@ class CliEndToEndTests(unittest.TestCase):
         profiles_path = self.home / ".claude" / "plugin-configure" / "profiles.json"
         for bad in ('{"profiles": ["x"]}', '{"profiles": {"p": "oops"}}',
                     '{"profiles": "general"}', '[]',
-                    '{"profiles": {"p": {"skills": null}}}'):
+                    '{"profiles": {"p": {"skills": null}}}',
+                    '{"profiles": {"p": {"plugins": ["bad-id"]}}}'):
             profiles_path.write_text(bad)
             result = self.run_apply("p")
             self.assertEqual(result.returncode, 2, f"{bad}: {result.stderr}")
@@ -801,6 +940,28 @@ class CliEndToEndTests(unittest.TestCase):
         result = self.run_apply("test-profile")
         self.assertEqual(result.returncode, 2)
         self.assertEqual(broken.read_text(), "{not json")
+        self.assertFalse(
+            (self.repo / ".claude" / "plugin-configure.json").exists())
+
+    def test_invalid_utf8_settings_json_errors_cleanly(self):
+        (self.repo / ".claude").mkdir()
+        settings_path = self.repo / ".claude" / "settings.local.json"
+        settings_path.write_bytes(b"\xff")
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("fix it and re-run", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse(
+            (self.repo / ".claude" / "plugin-configure.json").exists())
+
+    def test_deeply_nested_settings_json_errors_cleanly(self):
+        (self.repo / ".claude").mkdir()
+        settings_path = self.repo / ".claude" / "settings.local.json"
+        settings_path.write_text("[" * 5000 + "]" * 5000)
+        result = self.run_apply("test-profile")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("fix it and re-run", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
         self.assertFalse(
             (self.repo / ".claude" / "plugin-configure.json").exists())
 
