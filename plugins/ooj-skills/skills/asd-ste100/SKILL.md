@@ -49,8 +49,8 @@ substitutions are illustrative, not the dictionary:
 | accomplish, perform, carry out | do |
 | indicate, illustrate | show |
 | depress (a button) | push |
-| approximately | about |
-| sufficient | enough |
+| about (meaning "roughly") | approximately |
+| enough | sufficient |
 | a number of | some, or a specific number |
 
 ## Writing rules
@@ -63,14 +63,18 @@ The standard groups its 53 rules into areas. The ones that change most text:
 - No slang, jargon, idioms, or contractions.
 
 **Noun phrases**
-- Do not string more than three nouns together. Break longer clusters with
-  prepositions or hyphens (`the position of the control lever`, not
-  `the control lever position adjustment`).
+- Do not string more than three words together in a noun cluster — count every
+  word, not only the nouns (`main fuel pump assembly` is four words and breaks
+  the rule). Break longer clusters with prepositions or hyphens (`the position
+  of the control lever`, not `the control lever position adjustment`).
 - Keep articles (`a`, `an`, `the`) — never drop them to save words.
 
 **Verbs**
 - Use active voice. In instructions, use the imperative: start with the verb
-  (`Remove the panel.`).
+  (`Remove the panel.`). Two exceptions: **descriptive** text may use the
+  passive when the agent is unknown or unimportant (`The panel is held by four
+  bolts.`), and a **past participle may serve as an adjective**
+  (`the removed panel`, `a damaged wire`).
 - Use only simple tenses: infinitive, imperative, simple present, simple past,
   and `will` future. No perfect or compound tenses.
 - Do not use the `-ing` form as a verb (no continuous tenses). It is allowed
@@ -99,9 +103,9 @@ The standard groups its 53 rules into areas. The ones that change most text:
 | Procedural sentence | ≤ 20 words |
 | Descriptive sentence | ≤ 25 words |
 | Paragraph (descriptive) | ≤ 6 sentences, one topic |
-| Noun cluster | ≤ 3 nouns |
+| Noun cluster | ≤ 3 words |
 | Verb tenses | infinitive, imperative, simple present/past, `will` future |
-| Voice | active (imperative for instructions) |
+| Voice | active; imperative for instructions — passive OK in descriptive text when the agent is unknown; past participle OK as an adjective |
 
 ## Process
 
@@ -113,8 +117,9 @@ The standard groups its 53 rules into areas. The ones that change most text:
 3. **Replace unapproved words** with their single approved equivalent. Keep a
    running project list for the technical names and verbs you reuse.
 4. **Fix the verbs** — active voice, imperative for instructions, simple tenses
-   only, no `-ing` verb forms.
-5. **Fix noun phrases** — break clusters over three nouns; restore dropped
+   only, no `-ing` verb forms. Keep the passive in descriptive sentences whose
+   agent is unknown, and keep a past participle used as an adjective.
+5. **Fix noun phrases** — break clusters over three words; restore dropped
    articles.
 6. **Place warnings and cautions** before their step, each leading with a
    command.
