@@ -19,6 +19,7 @@ manifests at [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json
 | [`transcripts`](plugins/transcripts/) | Worktree-safe Claude Code and Codex transcript archives with configurable verbosity. |
 | [`spec-to-tasks`](plugins/spec-to-tasks/) | Turn a PRD, spec, or MVP doc into a readable markdown task tree: parse into tasks, score complexity, and expand into subtasks — native skills, no MCP server or API keys. |
 | [`plugin-configure`](plugins/plugin-configure/) | Cold-start profile setup: offers a curated skill/plugin profile on first launch in an unconfigured repo and writes it to `.claude/settings.local.json`. |
+| [`ooj-skills`](plugins/ooj-skills/) | Every loose skill that doesn't warrant a plugin of its own, in one bundle: conventional-commits (a Conventional Commits message reference), asd-ste100 (ASD-STE100 Simplified Technical English), and readme (generate a standard GitHub-style README from the repo) — pure skills, no hooks or scripts. |
 
 ## Install
 
@@ -56,6 +57,15 @@ codex plugin add transcripts@ooj-tools
    (schema: [build plugins](https://developers.openai.com/codex/plugins/build)).
    A `.codex-plugin/plugin.json` is optional — Codex falls back to reading
    `.claude-plugin/plugin.json`.
+
+### Adding a loose skill
+
+A single skill doesn't get its own plugin. Drop `skills/<skill>/SKILL.md` into
+[`ooj-skills`](plugins/ooj-skills/) — the one bundle for every loose skill,
+whatever its topic — add a row to that bundle's README table, and bump its
+minor version. Reach for a plugin of its own only when the skill needs
+commands, agents, hooks, scripts, or an MCP server. The full convention lives
+in [`plugins/AGENTS.md`](plugins/AGENTS.md).
 
 If the plugin wants dox to maintain its own AGENTS.md tree, drop a `.dox.json`
 in its root (`dox init`) — the repo's `git` pre-commit gate
