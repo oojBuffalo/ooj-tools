@@ -19,7 +19,7 @@ manifests at [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json
 | [`transcripts`](plugins/transcripts/) | Worktree-safe Claude Code and Codex transcript archives with configurable verbosity. |
 | [`spec-to-tasks`](plugins/spec-to-tasks/) | Turn a PRD, spec, or MVP doc into a readable markdown task tree: parse into tasks, score complexity, and expand into subtasks — native skills, no MCP server or API keys. |
 | [`plugin-configure`](plugins/plugin-configure/) | Cold-start profile setup: offers a curated skill/plugin profile on first launch in an unconfigured repo and writes it to `.claude/settings.local.json`. |
-| [`ooj-skills`](plugins/ooj-skills/) | Every loose skill that doesn't warrant a plugin of its own, in one bundle: conventional-commits (a Conventional Commits message reference) and asd-ste100 (ASD-STE100 Simplified Technical English) — pure skills, no hooks or scripts. |
+| [`ooj-skills`](plugins/ooj-skills/) | Every loose skill that doesn't warrant a plugin of its own, in one bundle: conventional-commits (a Conventional Commits message reference), asd-ste100 (ASD-STE100 Simplified Technical English), and readme (generate a standard GitHub-style README from the repo) — pure skills, no hooks or scripts. |
 
 ## Install
 

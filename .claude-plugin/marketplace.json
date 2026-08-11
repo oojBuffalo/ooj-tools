@@ -29,7 +29,7 @@
     {
       "name": "ooj-skills",
       "source": "./plugins/ooj-skills",
-      "description": "Every loose skill that doesn't warrant a plugin of its own, in one bundle: conventional-commits (a Conventional Commits message reference) and asd-ste100 (ASD-STE100 Simplified Technical English) — pure skills, no hooks or scripts."
+      "description": "Every loose skill that doesn't warrant a plugin of its own, in one bundle: conventional-commits (a Conventional Commits message reference), asd-ste100 (ASD-STE100 Simplified Technical English), and readme (generate a standard GitHub-style README from the repo) — pure skills, no hooks or scripts."
     }
   ]
 }
