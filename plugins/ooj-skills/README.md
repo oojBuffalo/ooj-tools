@@ -11,8 +11,9 @@ markdown: no hooks, scripts, or commands. The convention is documented in
 | `conventional-commits` | "write a conventional commit", "format this commit message", "what type should this commit be" | Concise Conventional Commits v1.0.0 reference: types, spec requirements kept separate from optional house style, breaking-change syntax, worked examples, and a staged-diff-first process. |
 | `asd-ste100` | "write in Simplified Technical English", "convert this to ASD-STE100", "make this doc plain/unambiguous" | ASD-STE100 Simplified Technical English reference: the approved-word dictionary principle, the writing rules that reshape most text, sentence/paragraph limits, and a conversion process — for generated prose or existing text being rewritten. |
 | `readme` | "write a README", "generate a README for this repo", "improve/restructure this README", "add badges and sections" | Generate or upgrade a standard GitHub-style README by inspecting the repo: a required/optional section backbone with archetype inserts, shields.io badges, GitHub admonitions, an inspect-then-fill process, and a fill-in template. |
+| `popout` | "pop out a minimal app", "boop out an app in the browser to compare/edit these" | Build a throwaway single-file, standard-library local web app on `127.0.0.1` to view, compare, or edit files side by side, with a hash-guarded save, a check that it works, and a report of how to start it again. |
 
-In Codex, invoke a skill by name: `$conventional-commits`, `$asd-ste100`, `$readme`.
+In Codex, invoke a skill by name: `$conventional-commits`, `$asd-ste100`, `$readme`, `$popout`.
 
 ## Install
 
