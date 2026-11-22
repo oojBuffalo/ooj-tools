@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Set up and verify native Claude Code and Codex restore in Herdr TUI."""
+
+import argparse
+from collections import Counter
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tomllib
+
+
+AGENTS = ("claude", "codex")
+HERDR_DIGITS = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+
+def herdr(*args):
+    return subprocess.check_output(["herdr", *args], text=True, timeout=15)
+
+
+def restore_setting(config_path):
+    try:
+        config = tomllib.loads(config_path.read_text())
+    except FileNotFoundError:
+        return True
+    enabled = config.get("session", {}).get("resume_agents_on_restore", True)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"{config_path} requires a boolean session.resume_agents_on_restore")
+    return enabled
+
+
+def pane_number(number):
+    digits = ""
+    while number > 0:
+        number, digit = divmod(number, len(HERDR_DIGITS))
+        digits = HERDR_DIGITS[digit] + digits
+    return digits or "0"
+
+
+def saved_panes(layout):
+    # shortcut: reads Herdr 0.9.5's snapshot format, update if its version changes.
+    if layout["version"] != 3:
+        raise ValueError(f"unsupported Herdr snapshot version {layout['version']}")
+    return {
+        f"{workspace['id']}:p{pane_number(workspace['public_pane_numbers'][key])}": pane
+        for workspace in layout["workspaces"]
+        for tab in workspace["tabs"]
+        for key, pane in tab["panes"].items()
+    }
+
+
+def status(layout, server, target):
+    panes = saved_panes(layout)
+    saved_refs = {
+        pane_id: pane["agent_session"]
+        for pane_id, pane in panes.items()
+        if pane.get("agent_session", {}).get("agent") in AGENTS
+    }
+    counts = Counter((ref["agent"], ref["value"]) for ref in saved_refs.values())
+    workspaces = layout["workspaces"]
+    num_tabs = sum(len(workspace["tabs"]) for workspace in workspaces)
+    print(f"{len(workspaces)} workspaces, {num_tabs} tabs, {len(panes)} panes on disk")
+
+    ready = True
+    for pane_id, ref in sorted(saved_refs.items()):
+        if counts[ref["agent"], ref["value"]] > 1:
+            print(f"{pane_id} {ref['agent']} has a duplicate saved session ID")
+            ready = False
+        else:
+            print(f"{pane_id} {ref['agent']} has a saved session ID")
+    if not saved_refs:
+        print("No Claude or Codex session IDs saved yet.")
+
+    if server["running"]:
+        live = json.loads(herdr(*target, "api", "snapshot"))["result"]["snapshot"]["panes"]
+        for pane in live:
+            pane_id = pane["pane_id"]
+            agent = pane.get("agent")
+            ref = pane.get("agent_session")
+            if pane.get("restore_error"):
+                print(f"{pane_id} has a Herdr restore error")
+                ready = False
+            if agent in AGENTS and (
+                not ref or ref.get("agent") != agent or ref != saved_refs.get(pane_id)
+            ):
+                print(f"{pane_id} {agent} is open without its current session ID on disk")
+                ready = False
+    else:
+        print("Server is offline. Showing the last saved layout.")
+    return ready
+
+
+def checkpoint(directory, snapshot_bytes, config_path):
+    try:
+        config_bytes = config_path.read_bytes()
+    except FileNotFoundError:
+        config_bytes = None
+    directory.mkdir(mode=0o700)
+    snapshot = directory / "session.json"
+    config = directory / "config.toml"
+    try:
+        snapshot.write_bytes(snapshot_bytes)
+        if config_bytes is not None:
+            config.write_bytes(config_bytes)
+    except OSError:
+        snapshot.unlink(missing_ok=True)
+        config.unlink(missing_ok=True)
+        directory.rmdir()
+        raise
+    print(f"Saved Herdr checkpoint to {directory}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--session", help="Herdr session name, defaulting to the current socket")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("install", help="install or update Herdr's Claude and Codex hooks")
+    commands.add_parser("status", help="check installed hooks and saved agent sessions")
+    save = commands.add_parser("checkpoint", help="copy the saved layout and Herdr config")
+    save.add_argument("directory", type=Path, help="new directory for the checkpoint")
+    args = parser.parse_args()
+
+    sessions = json.loads(herdr("session", "list", "--json"))["sessions"]
+    default_dir = next(Path(session["session_dir"]) for session in sessions if session["default"])
+    config_path = Path(os.environ.get("HERDR_CONFIG_PATH") or default_dir / "config.toml")
+    if args.command != "checkpoint":
+        if "resume_agents_on_restore" not in herdr("--default-config"):
+            raise ValueError("this Herdr binary does not support native agent restore")
+        enabled = restore_setting(config_path)
+        if not enabled:
+            print(f"Set session.resume_agents_on_restore = true in {config_path}.", file=sys.stderr)
+            if args.command == "install":
+                return 1
+        if args.command == "install":
+            for agent in AGENTS:
+                print(herdr("integration", "install", agent), end="")
+            print("Review and trust the Herdr hook in Codex with /hooks.")
+            print("Start or resume each agent in its Herdr pane to register its session ID.")
+            return 0
+
+    target = ["--session", args.session] if args.session else []
+    server = json.loads(herdr(*target, "status", "server", "--json"))
+    session = next(
+        (entry for entry in sessions if entry["socket_path"] == server["socket"]), None
+    )
+    if session is None:
+        raise ValueError("no saved Herdr session matches the selected socket")
+    snapshot = Path(session["session_dir"]) / "session.json"
+    snapshot_bytes = snapshot.read_bytes()
+    layout = json.loads(snapshot_bytes)
+
+    if args.command == "checkpoint":
+        saved_panes(layout)
+        checkpoint(args.directory, snapshot_bytes, config_path)
+        return 0
+
+    print(f"Herdr session {session['name']}")
+    integrations = dict(
+        line.split(": ", 1)
+        for line in herdr("integration", "status").splitlines()
+        if line.partition(": ")[0] in AGENTS
+    )
+    for agent in AGENTS:
+        print(f"{agent} hook {integrations.get(agent, 'unavailable')}")
+    current_hooks = all(integrations.get(agent, "").startswith("current ") for agent in AGENTS)
+    ready = status(layout, server, target)
+    return 0 if enabled and current_hooks and ready else 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, TypeError, KeyError, StopIteration, subprocess.SubprocessError) as exc:
+        sys.exit(f"herdr-recovery: {exc}")

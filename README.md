@@ -45,6 +45,12 @@ codex plugin marketplace add /path/to/ooj-tools
 codex plugin add transcripts@ooj-tools
 ```
 
+## Herdr TUI recovery
+
+[Herdr recovery](tools/herdr-recovery/) installs Claude Code and Codex session
+hooks, checks which panes have a saved conversation ID, and exports
+layout and configuration checkpoints.
+
 ## Adding a plugin
 
 1. Create `plugins/<name>/` with a `.claude-plugin/plugin.json` (and whatever
